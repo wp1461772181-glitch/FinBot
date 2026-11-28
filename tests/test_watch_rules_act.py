@@ -57,8 +57,8 @@ def owner(monkeypatch, disposable_database):
     wipe()
     import app.agent_chat_identity as identity
     import app.agent_chat_stream as stream
-    from app.agent_workflow import direct, tools
-    for module in (consent, direct, tools, identity, act, stream):
+    from app.agent_workflow import tools
+    for module in (consent, tools, identity, act, stream):
         monkeypatch.setattr(module, "owner_credential_matches", lambda c: c == OWNER, raising=False)
     monkeypatch.setattr(watch_rules, "_holdings", lambda o: HOLD)
     monkeypatch.setattr(sentinel_bridge, "refresh_sentinel_snapshot", lambda: None)

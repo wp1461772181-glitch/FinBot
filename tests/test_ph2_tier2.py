@@ -388,7 +388,6 @@ def test_document_ticker_with_dot_and_dash_is_a_plain_json_value_in_the_cache_ke
 # --------------------------------------------------------------------------------------------------------------------
 import asyncio
 
-from app.agent_workflow import direct
 from app.agent_workflow.state import AgentRuntimeContext
 
 
@@ -419,53 +418,6 @@ def no_sec(monkeypatch):
 def _unbound_card(monkeypatch, on, question="最近有什么新闻？"):
     _switch(monkeypatch, "FINBOT_PH2_ENTITY_CARD_SHADOW", on)
     return _card_turn(question, classifier=lambda _: {"category": "D", "company": "Microsoft Corporation", "symbol": "MSFT"})
-
-
-def test_entity_card_is_recorded_with_its_reasons_when_on(monkeypatch, no_sec):
-    result = _unbound_card(monkeypatch, True)
-    assert result["status"] == "waiting_for_input" and result["pending_request"]["question"] == "请确认这次指代的公司。"
-    [record] = result["audit"]["entity_card_shadow"]
-    assert record["classifier"] == {"symbol": "MSFT", "company": "Microsoft Corporation"}
-    assert record["user_words"] == "最近有什么新闻？"
-    assert record["would_use"] == {"symbol": "MSFT", "company": "Microsoft Corporation"}
-    assert record["unbound"] == ["MSFT", "Microsoft Corporation"]
-    assert record["fallbacks"] == {
-        "resolve_ticker": "not_tried", "multi_entity": "fewer_than_two_symbols", "sec_pair": "mention_not_grounded",
-        "two_companies": "company_has_no_unique_sec_ticker", "symbol_anchor": "symbol_not_written_in_user_words",
-        "native_mapping": "no_name_without_latin_words"}
-
-
-def test_entity_card_user_words_are_cut_to_200_characters(monkeypatch, no_sec):
-    result = _unbound_card(monkeypatch, True, question="今天" * 150 + "有什么新闻？")
-    assert result["status"] == "waiting_for_input"
-    assert len(result["audit"]["entity_card_shadow"][0]["user_words"]) == 200
-
-
-def test_entity_card_off_records_nothing_and_asks_the_same_card(monkeypatch, no_sec):
-    on = _unbound_card(monkeypatch, True)
-    off = _unbound_card(monkeypatch, False)
-    assert "entity_card_shadow" not in off["audit"]
-    for key in ("status", "answer"):
-        assert on[key] == off[key], key
-    volatile = {"id", "expires_at"}      # a new card id and expiry each turn
-    assert {k: v for k, v in on["pending_request"].items() if k not in volatile} == {k: v for k, v in off["pending_request"].items() if k not in volatile}
-    assert {k: v for k, v in on["audit"].items() if k != "entity_card_shadow"}.keys() == off["audit"].keys()
-    assert on["audit"]["stages"]["resolver"] == off["audit"]["stages"]["resolver"]
-
-
-def test_entity_card_not_asked_records_nothing_either_way(monkeypatch, no_sec):
-    for on in (True, False):
-        _switch(monkeypatch, "FINBOT_PH2_ENTITY_CARD_SHADOW", on)
-        result = _card_turn("微软 MSFT 的营收", classifier=lambda _: {"category": "D", "symbol": "MSFT"},
-                            canonical="微软（MSFT）的营收是多少？")
-        assert result["pending_request"] is None and "entity_card_shadow" not in result["audit"]
-
-
-def test_entity_card_record_failure_is_swallowed():
-    from types import SimpleNamespace
-    fake = SimpleNamespace(scope={"symbol": "MSFT"}, original="hi", audit={})
-    assert direct.Turn.record_entity_card(fake, None, {}) is None      # entities=None cannot be iterated
-    assert "entity_card_shadow" not in fake.audit
 
 
 def test_entity_card_report_groups_by_classifier_entity_and_never_writes():
@@ -590,24 +542,6 @@ def test_gate_row_undated_page_without_soft_keeps_the_old_refusal_when_on(monkey
     _switch(monkeypatch, "FINBOT_PH2_WEB_DATE_SOFT", True)
     assert gate_row("Apple news", _page(), company="Apple", days_back=7) == (False, "requested_time_window_missing")
     assert gate_row("Apple news", _page(published_at=_day(1)), company="Apple", days_back=7) == (True, "sufficient_evidence")
-
-
-def test_entity_card_user_words_are_masked_before_they_are_kept(monkeypatch, no_sec):
-    _switch(monkeypatch, "FINBOT_PH2_ENTITY_CARD_SHADOW", True)
-    question = "台积电的毛利率 sk-or-v1-abcdefSECRET1234567890 联系 me@example.com 13812345678 很长"
-    result = _card_turn(question, classifier=lambda _: {"category": "D", "company": "Taiwan Semiconductor", "symbol": "TSM"})
-    words = result["audit"]["entity_card_shadow"][0]["user_words"]
-    assert "sk-or-v1" not in words and "me@example.com" not in words and "13812345678" not in words
-    assert words.count("[REDACTED]") == 3 and words.startswith("台积电的毛利率")
-
-
-def test_entity_card_record_says_whether_the_sec_list_was_ever_read(monkeypatch, no_sec):
-    from app.agent_workflow import entities
-    _switch(monkeypatch, "FINBOT_PH2_ENTITY_CARD_SHADOW", True)
-    monkeypatch.setattr(entities, "_cache", None)
-    assert _unbound_card(monkeypatch, True)["audit"]["entity_card_shadow"][0]["sec_list_available"] is False
-    monkeypatch.setattr(entities, "_cache", [{"ticker": "MSFT", "title": "MICROSOFT CORP"}])
-    assert _unbound_card(monkeypatch, True)["audit"]["entity_card_shadow"][0]["sec_list_available"] is True
 
 
 def test_entity_card_report_query_returns_only_the_card_element(monkeypatch, disposable_database):

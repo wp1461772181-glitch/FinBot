@@ -10,7 +10,7 @@ import pytest
 from app import fin_news_engine as engine_mod
 from app.agent_chat_models import NewsItem
 from app.agent_tool_catalog import definitions
-from app.agent_workflow import direct, tools
+from app.agent_workflow import tools
 from app.agent_workflow.state import AgentRuntimeContext
 from app.database import Base, SessionLocal, engine
 
@@ -129,26 +129,3 @@ def test_description_names_the_refresh_fields_only_when_on(monkeypatch):
     assert "refresh_note" not in old and new.startswith(old) and "refresh_timed_out" in new and "latest_fetched_at" in new
 
 
-def test_model_sees_the_refresh_note_beside_the_rows(news_db, monkeypatch):
-    monkeypatch.setenv("FINBOT_NEWS_REFRESH_BOUND", "on")
-    monkeypatch.setenv("FINBOT_NEWS_REFRESH_TIMEOUT_SECONDS", "1")
-    engine_mod.set_http_fetcher(_blocking_fetcher(news_db))
-    seen = []
-    step = {"n": 0}
-
-    def decider(messages, _tools):
-        step["n"] += 1
-        if step["n"] == 1:
-            return {"tool_calls": [{"id": "c1", "function": {"name": "search_configured_news",
-                                    "arguments": json.dumps({"tickers": ["NVDA"], "refresh_first": True})}}]}
-        seen.extend(m.get("content", "") for m in messages if m.get("role") == "tool")
-        return {"content": "库内新闻较旧。"}
-
-    async def quiet(_event):
-        return None
-    ctx = AgentRuntimeContext("custom", "test", "dummy",
-                              resolver=lambda p: {"relationship": "new", "canonical_question": "NVDA 新闻", "symbols": ["NVDA"], "referents": []},
-                              intent_recognizer=lambda p: {"category": "A", "mode": "none", "symbols": ["NVDA"]}, decider=decider)
-    asyncio.run(direct.run_direct_turn("NVDA 新闻", ctx, emit=quiet))
-    joined = " ".join(str(c) for c in seen)
-    assert "refresh_timed_out" in joined and "latest_fetched_at" in joined

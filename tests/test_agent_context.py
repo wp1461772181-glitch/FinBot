@@ -318,56 +318,9 @@ def test_a_stranger_gets_no_context_and_cannot_append_to_a_foreign_range(disposa
 
 # --- the stream: what the model is sent, and the guards ------------------------------------------------
 
-def test_the_model_gets_the_note_then_the_older_turns_then_the_recent_ones(stream_fixture, monkeypatch):
-    import app.agent_chat_stream as stream
-    send, classification, _, _, _, requests, _ = stream_fixture
-    classification["intent"] = "general"
-
-    async def context(*_a, **_k):
-        return {"l1_rows": [{"role": "user", "content": "近处的问题", "status": "complete", "turn_id": "t2"},
-                            {"role": "assistant", "content": "近处的答复", "status": "complete", "turn_id": "t2"}],
-                "l1_turns": 1, "l1_bytes": 90,
-                "half_turns": [layers.Turn(1, 2, "很早的问题 苹果", "很早的答复")],
-                "overflow": [], "segments": [{"seq": 1, "content": "更早：用户只看 10-Q"}]}
-
-    monkeypatch.setattr(stream, "conversation_context", context)
-    asyncio.run(send("Explain prime numbers"))
-    # C1/C12: stages receive the same layered history as a labelled JSON field.
-    payloads=[json.loads(messages[-1]['content']) for messages,_schemas,_base in requests if messages[-1]['content'].startswith('{')]
-    payload=next(value for value in payloads if 'history' in value and '近处的问题' in value['history'])
-    sent=json.loads(payload['history']);contents=[m['content'] for m in sent]
-    note=next(c for c in contents if c.startswith(layers.MEMORY_MARKER))
-    assert '更早：用户只看 10-Q' in note
-    assert contents.index('很早的问题 苹果')<contents.index('近处的问题')<contents.index(note)
-    assert next(m for m in sent if m['content']==note)['role']=='user'
-
-
-
 def test_the_system_prompt_says_the_memory_note_is_not_evidence():
     import app.agent_chat_stream as stream
     assert 'Earlier conversation (memory' in stream.SYSTEM and "never cited" in stream.SYSTEM
-
-
-def test_the_request_guard_is_the_budget_not_a_fixed_forty_kilobytes(stream_fixture, monkeypatch):
-    import app.agent_chat_stream as stream
-    send, classification, _, _, _, _, _ = stream_fixture
-    classification["intent"] = "general"
-
-    async def big(*_a, **_k):
-        # 90 KB of earlier conversation: over the old 40 KB guard, inside the 128 KB one
-        rows = []
-        for n in range(10):
-            tid = f"t{n}"
-            rows.extend([{"role": "user", "content": "问" * 1500, "status": "complete", "turn_id": tid},
-                         {"role": "assistant", "content": "答" * 1500, "status": "complete", "turn_id": tid}])
-        return {"l1_rows": rows}
-
-    monkeypatch.setattr(stream, "conversation_context", big)
-    wire = asyncio.run(send("Explain prime numbers"))
-    assert "chat_context_too_large" not in wire and "event: done" in wire
-    monkeypatch.setattr(layers, "guard_for_window", lambda window: 40_000)       # the old guard
-    refused = asyncio.run(send("Explain prime numbers"))
-    assert "event: error" in refused and "chat_context_too_large" in refused and "event: done" not in refused
 
 
 # --- the usage endpoint --------------------------------------------------------------------------------

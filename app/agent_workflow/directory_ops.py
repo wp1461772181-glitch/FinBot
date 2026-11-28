@@ -196,8 +196,8 @@ def _model_words(name: str | None) -> str:
 
 
 def _skill_words(owner: str, ids) -> str:
-    from . import direct
-    names = direct.skill_names(owner)
+    from .write_text import skill_names
+    names = skill_names(owner)
     return "、".join(names.get(i, "已删除的技能") for i in ids or ()) or "无"
 
 

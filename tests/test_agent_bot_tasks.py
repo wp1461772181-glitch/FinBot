@@ -54,9 +54,9 @@ def owner(monkeypatch, disposable_database, tmp_path):
             db.query(model).delete()
         db.commit()
     monkeypatch.setenv("AGENT_MODELS_CONFIG", str(tmp_path / "models.yaml"))
-    from app.agent_workflow import consent, direct, tools
+    from app.agent_workflow import consent, tools
     import app.agent_chat_identity as identity
-    for module in (consent, direct, tools, identity):
+    for module in (consent, tools, identity):
         monkeypatch.setattr(module, "owner_credential_matches", lambda c: c == OWNER)
     return OWNER
 
@@ -458,7 +458,6 @@ def test_the_unattended_turn_drops_what_the_kernel_took_back(owner, monkeypatch)
     """6a: the kernel streams a step's preamble before a tool call and then takes it back (``answer_reset``); the stored answer is the
     final text only, so a run whose answer is 「无新消息」 after a preamble is still quiet."""
     from app.agent_workflow import graph
-
     async def stream_workflow(**kwargs):
         yield {"event": "delta", "text": "我先查一下苹果最新的公告。"}
         yield {"event": "answer_reset"}

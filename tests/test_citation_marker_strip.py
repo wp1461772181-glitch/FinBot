@@ -7,7 +7,6 @@ import re
 
 import pytest
 
-from app.agent_workflow.direct import Turn
 from app.agent_workflow.evidence import citation_errors, strip_invalid_markers
 from app.agent_workflow.state import AgentRuntimeContext
 
@@ -81,20 +80,3 @@ def _turn(citations):
     return turn
 
 
-def test_the_delivered_answer_and_its_unverified_lines_carry_no_dead_marker():
-    answer = 'AAPL 股息率 0.4% [1]。\n按股价推算年股息约 1.04 美元 [12][13]。'
-    result = _turn(POOL).finish(answer)
-    assert '[12]' not in result['answer'] and '[13]' not in result['answer']
-    assert 'AAPL 股息率 0.4% [1]。' in result['answer']
-    assert '1.04 美元。' in result['answer']
-    # S0: no footnote and no user-visible flag; the dead marker is still stripped, and the check is audit-only.
-    assert '未能与来源核对' not in result['answer'] and result['unverified_lines']==[]
-    assert 'invalid_citation' in result['audit']['legacy_review']['issues']
-    legacy=result['audit']['legacy_review']['unverified_lines']
-    assert legacy and all('[12]' not in e['line'] and '[13]' not in e['line'] for e in legacy)
-
-
-def test_a_clean_answer_is_delivered_byte_for_byte():
-    answer = 'AAPL 股息率 0.4% [1]。\n来源：[1][6][11]'
-    result = _turn(POOL).finish(answer)
-    assert result['answer'] == answer

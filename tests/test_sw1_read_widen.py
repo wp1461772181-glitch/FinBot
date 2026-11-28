@@ -8,7 +8,6 @@ from datetime import date
 
 import pytest
 
-from app.agent_workflow import direct
 from app.agent_workflow.filing_coverage import RECEIPT_LIMIT, coverage_receipt
 from app.agent_workflow.financials import xbrl_metrics_for
 from app.agent_workflow.state import AgentRuntimeContext
@@ -220,74 +219,3 @@ def test_the_ratio_words_name_the_figures_a_margin_needs(monkeypatch):
     assert xbrl_metrics_for(['毛利率']) == []
 
 
-def test_the_read_receipt_reaches_the_model_beside_the_rows(monkeypatch):
-    symbol = new_symbol(); ids = seed(symbol, aapl_filings())
-    seen = []
-
-    def decide(messages, tools):
-        seen.append(messages)
-        if len(seen) == 1:
-            return {'tool_calls': [{'id': 'call-1', 'function': {'name': 'query_financials',
-                    'arguments': json.dumps({'symbol': symbol, 'metrics': ['revenue'], 'latest': True})}}]}
-        return {'content': f'{symbol} 已取到财报营收。'}
-
-    async def emit(_):
-        pass
-
-    ctx = AgentRuntimeContext('custom', 'test', 'dummy', classifier=lambda _: {'category': 'A', 'mode': 'financials',
-                              'symbol': symbol, 'symbols': [symbol], 'days_back': None}, decider=decide)
-    try:
-        with research_context('sw1-read-test', cutoff=CUTOFF):
-            asyncio.run(direct.run_direct_turn(f'{symbol} 最近一期营收', ctx, emit=emit))
-        tool_messages = [m for messages in seen for m in messages if isinstance(m, dict) and m.get('role') == 'tool']
-        bodies = [json.loads(m['content']) for m in tool_messages if 'coverage' in str(m.get('content'))]
-        assert bodies and 'coverage' in bodies[0] and bodies[0]['data']
-    finally:
-        drop(ids)
-
-
-def test_a_margin_word_pre_reads_its_figures_without_latest_or_form(monkeypatch):  # T16
-    """Route A's XBRL pre-read: a margin is read through its numerator and revenue, with neither latest nor form."""
-    async def no_model(provider, model, key, messages, schemas, base_url=None, **_kwargs):
-        return {}, {'role': 'assistant', 'content': ''}
-    monkeypatch.setattr(direct, 'decision_request', no_model)
-    symbol = new_symbol()
-    executed = []
-
-    def execute(name, args):
-        executed.append((name, args))
-        return {'ok': True, 'data': []}
-
-    async def emit(_):
-        pass
-    ctx = AgentRuntimeContext('custom', 'test', 'dummy',
-                              classifier=lambda _: {'category': 'A', 'mode': 'financials', 'symbol': symbol, 'symbols': [symbol],
-                                                    'metrics': ['服务收入', '毛利率'], 'days_back': None},
-                              decider=lambda messages, tools: {'content': ''}, executor=execute)
-    with research_context('sw1-read-test', cutoff=CUTOFF):
-        asyncio.run(direct.run_direct_turn(f'{symbol} 的服务收入与毛利率', ctx, emit=emit))
-    # The tool layer fills defaults in, so the test reads the values that matter rather than the whole dict.
-    assert executed and executed[0][0] == 'query_financials'
-    args = executed[0][1]
-    assert args['symbol'] == symbol and sorted(args['metrics']) == ['gross_profit', 'revenue']
-    assert not args.get('latest') and args.get('form') is None
-
-
-def test_the_instruction_carries_the_read_sentences_only_while_their_switches_are_on(monkeypatch):  # T39 (S1 part)
-    from app.agent_workflow import direct
-    text = '\n'.join(direct.INSTRUCTION)
-    on = direct.evidence_instruction(text)
-    assert direct.EVIDENCE_NEW in on and direct.FRESHNESS_SENTENCE in on and direct.EVIDENCE_OLD not in on
-    monkeypatch.setenv('FINBOT_SW1_FRESHNESS', 'off')
-    no_fresh = direct.evidence_instruction(text)
-    assert direct.EVIDENCE_NEW in no_fresh and direct.FRESHNESS_SENTENCE not in no_fresh
-    monkeypatch.setenv('FINBOT_SW1_READ_WIDEN', 'off')
-    # S3 (FINBOT_SW1_EXISTENCE_KNOWLEDGE, on by default) adds its own sentence; this check is about S1's sentences alone.
-    monkeypatch.setenv('FINBOT_SW1_EXISTENCE_KNOWLEDGE', 'off')
-    # SW1B's sample sentence (on by default, its own switch) would also differ from the constant; this check is S1's alone.
-    monkeypatch.setenv('FINBOT_SW1B_SAMPLE_AGGREGATE', 'off')
-    # SW2's self-state sentence (on by default) is a switch of its own; this check is SW1's alone.
-    monkeypatch.setenv('FINBOT_SW2_SELF_STATE_WORDING', 'off')
-    # PH1 M-3's gate_note sentence (on by default) is likewise a switch of its own.
-    monkeypatch.setenv('FINBOT_PH1_WEB_ENTITY_SOFT', 'off')
-    assert direct.evidence_instruction(text) == text and direct.EVIDENCE_OLD in text   # off: the constant's own text

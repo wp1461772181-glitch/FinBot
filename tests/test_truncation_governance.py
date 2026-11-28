@@ -8,8 +8,7 @@ from datetime import UTC, datetime
 
 from app import observability
 from app.agent_web_research import MAX_EXCERPT, _focus_source, extract_page
-from app.agent_workflow import evidence, truncation
-from app.agent_workflow.direct import Turn
+from app.agent_workflow import evidence
 
 
 def _long_page():
@@ -142,59 +141,6 @@ def _turn():
 def _observation(n, rows=3, size=3000):
     return {'name': 'web_research', 'arguments': {'query': f'q{n}'}, 'accepted_evidence': True,
             'result': {'ok': True, 'data': [{'citation': f'[{n * 10 + r}]', 'excerpt': 'x' * size} for r in range(rows)]}}
-
-
-def test_the_model_evidence_payload_cuts_at_whole_sources_and_records_the_event():
-    turn = _turn()
-    accepted = [_observation(n) for n in range(1, 6)]          # 15 sources of ~3000 characters
-    text = turn.evidence_payload(accepted, budget=20000)
-    data = json.loads(text[text.index('[{"name"'):])             # whole, parseable structure: nothing cut mid-text
-    kept_rows = [row for obs in data for row in obs['result']['data']]
-    assert kept_rows and all(len(row['excerpt']) == 3000 for row in kept_rows)
-    assert 'Left out for length' in text and '[11]' in text.split('Left out for length')[1].split('[{"name"')[0]
-    assert kept_rows[-1]['citation'] == '[52]'                  # the newest source has priority
-    events = turn.audit['truncation_events']
-    assert len(events) == 1 and events[0]['site'] == 'tool_messages.accepted_evidence'
-    assert events[0]['original_chars'] > 20000 > events[0]['kept_chars'] > 0
-    assert events[0]['omitted_sources'] == 15 - len(kept_rows)
-
-
-def test_no_event_when_everything_fits():
-    turn = _turn()
-    text = turn.evidence_payload([_observation(1, rows=1, size=100)], budget=20000)
-    assert 'Left out' not in text and 'truncation_events' not in turn.audit
-
-
-def test_status_and_catalogue_payloads_cut_whole_items():
-    turn = _turn()
-    turn.feedback = [{'name': f't{i}', 'error_code': 'zero_evidence', 'hint': 'h' * 900} for i in range(20)]
-    status = turn.status_payload(budget=5000)
-    kept = json.loads(status.split(': ', 1)[1])
-    assert 0 < len(kept) < 20 and kept[-1]['name'] == 't19' and all(len(k['hint']) == 900 for k in kept)
-    turn.sets = [{'id': f'set{i}', 'scope': {}, 'rows': [{'title': 't' * 50, 'url': 'u' * 100, 'excerpt': 'p' * 400} for _ in range(10)]}
-                 for i in range(6)]
-    catalogue = turn.catalogue_payload(budget=3000)
-    sets = json.loads(catalogue.split(': ', 1)[1])
-    assert 0 < len(sets) < 6 and sets[-1]['id'] == 'set5'
-    assert {e['site'] for e in turn.audit['truncation_events']} == {
-        'tool_messages.feedback', 'tool_messages.result_catalogue', 'tool_messages.result_catalogue.items'}
-
-
-def test_memory_and_tool_result_cuts_are_at_item_boundaries():
-    text, original, kept, dropped = truncation.cut_lines('\n'.join(f'line {i} ' + 'm' * 90 for i in range(100)), 1000)
-    assert dropped > 0 and original > kept and all(line.endswith('m' * 90) for line in text.split('\n'))
-    content = json.dumps({'ok': True, 'data': [{'excerpt': 'e' * 2000, 'n': i} for i in range(5)]})
-    compact = json.loads(truncation.compact_tool_content(content, 6000))
-    assert compact['truncated'] is True and compact['omitted_items'] == 5 - len(compact['data'])
-    assert all(len(row['excerpt']) == 2000 for row in compact['data'])
-
-
-def test_record_updates_one_event_per_site():
-    audit = {}
-    truncation.record(audit, 'a', 100, 50)
-    truncation.record(audit, 'a', 120, 60)
-    assert audit['truncation_events'] == [{'site': 'a', 'original_chars': 120, 'kept_chars': 60, 'count': 2}]
-    assert truncation.record(audit, 'b', 10, 10) is None
 
 
 class _Obs:

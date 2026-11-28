@@ -53,8 +53,8 @@ def owner(monkeypatch, disposable_database):
     wipe()
     import app.agent_chat_identity as identity
     import app.agent_chat_stream as stream
-    from app.agent_workflow import direct, tools
-    for module in (consent, direct, tools, identity, act, stream):
+    from app.agent_workflow import tools
+    for module in (consent, tools, identity, act, stream):
         monkeypatch.setattr(module, "owner_credential_matches", lambda c: c == OWNER, raising=False)
     yield
     wipe()
@@ -229,17 +229,6 @@ def test_the_directory_lists_both_in_tier_one_with_their_wording():
         assert definitions()[name].level == "reversible" and name in OWNER_ONLY and name in KERNEL_ONLY
     assert "我记下了：……" in act.SUMMARIES["record_view"] and "不是证据" in act.SUMMARIES["record_view"]
     assert act.describe("record_view")["arguments"]["required"] == ["symbol", "text", "quote"]
-
-
-def test_the_old_engine_does_not_know_them():
-    from app.agent_workflow.routing import parse_route
-    for name in ("record_view", "drop_view"):
-        assert name not in legacy_definitions() and name not in write_tool_names()
-        assert name not in {s["function"]["name"] for s in schemas(owner=True, granted=set(definitions()))}
-        assert name not in {s["function"]["name"] for s in schemas(owner=False, kernel=True)}
-        assert name in {s["function"]["name"] for s in schemas(owner=True, kernel=True, granted=set(definitions()))}
-    route = parse_route(json.dumps({"category": "D", "days_back": None, "requested_actions": ["record_view", "drop_view", "record_trade"]}))
-    assert route.requested_actions == ["record_trade"]
 
 
 def test_the_registry_knows_where_they_are_and_that_a_web_delete_is_not_theirs():

@@ -18,8 +18,7 @@ import pytest
 
 from app.agent_chat_store import owner_hash
 from app.agent_chat_models import AgentResearchQueue
-from app.agent_workflow import consent, direct, tools
-from app.agent_workflow.direct import run_direct_turn
+from app.agent_workflow import consent, tools
 from app.agent_workflow.models import AgentConsent, AgentWebSource
 from app.agent_workflow.state import AgentRuntimeContext
 from app.database import Base, engine
@@ -46,7 +45,7 @@ def owned(monkeypatch, disposable_database):
     Base.metadata.create_all(engine, tables=[AgentConsent.__table__, AgentWebSource.__table__,
                                              KnowledgeDocument.__table__, AgentResearchQueue.__table__,
                                              UploadedEvidence.__table__, KnowledgeUploadOwner.__table__])
-    for module in (direct, consent, tools):
+    for module in (consent, tools):
         monkeypatch.setattr(module, "owner_credential_matches", lambda c: c == "owner")
     return "owner"
 
@@ -123,16 +122,6 @@ def _telegram(result):
     return sent
 
 
-def test_the_third_news_item_the_owner_counted_gets_a_card_with_telegram_buttons(owned):
-    """The live turn: the model names the reel (third in the news list), not the newest list's third row."""
-    result, _ = _run([_call("ingest_web_source", url=REEL)])
-    card = result["pending_request"]
-    assert card and card["reason"] == "write_confirmation" and card["display"]["url"] == REEL
-    (text, keyboard), = _telegram(result)
-    assert keyboard and [b["text"] for b in keyboard[0]] == ["同意", "取消"]
-    assert "网页" not in text and "确认卡" in text
-
-
 def _stray_state():
     state = _state()
     state["result_sets"][1]["rows"].append(_page(99, url=STRAY))
@@ -142,23 +131,3 @@ def _stray_state():
 STRAY = "https://example.org/tesla/stray"
 
 
-def test_a_save_the_server_refuses_never_reaches_the_owner_as_a_waiting_card(owned):
-    """A target that is third in no list: no card.  The model's tool message says so (not the stale
-    awaiting_confirmation), and a reply that still claims a waiting card carries the 「操作未执行」 notice."""
-    result, seen = _run([_call("ingest_web_source", url=STRAY)], state=_stray_state())
-    assert result["pending_request"] is None
-    tool_replies = [json.loads(m["content"]) for m in seen[-1] if m.get("role") == "tool"]
-    assert [r.get("error_code") for r in tool_replies] == ["result_position_mismatch"]
-    assert REEL in {t["url"] for t in tool_replies[0]["expected_targets"]}
-    assert "awaiting_confirmation" not in json.dumps(seen[-1], ensure_ascii=False)
-    assert "操作未执行" in result["answer"]
-    (text, keyboard), = _telegram(result)
-    assert keyboard is None
-
-
-def test_after_a_refused_target_the_model_can_name_the_right_one_and_get_the_card(owned):
-    result, _ = _run([_call("ingest_web_source", url=STRAY), _call("ingest_web_source", url=REEL)],
-                     state=_stray_state())
-    assert result["pending_request"]["display"]["url"] == REEL
-    (text, keyboard), = _telegram(result)
-    assert [b["text"] for b in keyboard[0]] == ["同意", "取消"] and "操作未执行" not in text

@@ -6,7 +6,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.agent_chat_stream import _failure_notice
-from app.agent_workflow import consent, direct
+from app.agent_workflow import consent
 from app.agent_workflow.models import AgentConsent
 from app.agent_workflow.state import AgentRuntimeContext
 from app.database import Base, SessionLocal, engine
@@ -56,47 +56,3 @@ def expired_card():
             'choices': [{'label': '微软', 'value': 'reply:微软'}]}
 
 
-def test_expired_clarification_reply_continues(monkeypatch):
-    monkeypatch.delenv('FINBOT_FP4_EXPIRED_CARD_REPLY', raising=False)
-    seen = []
-    def resolver(payload):
-        seen.append(payload['question'])
-        return {'relationship': 'new', 'canonical_question': payload['question']}
-    ctx = AgentRuntimeContext('custom', 'test', 'dummy', resolver=resolver,
-                              classifier=lambda _: {'category': 'D'}, decider=lambda *_: {'content': '好的。'})
-    card = expired_card()
-    result = asyncio.run(direct.run_direct_turn('reply:微软', ctx, emit=emit,
-                         state={'pending_request': card, 'requested_pending_id': card['id']}))
-    assert result['audit']['pending_request_expired_reply'] is True
-    assert result.get('reason') != 'pending_request_expired'
-    assert seen == ['微软']
-
-
-@pytest.mark.parametrize('value,flag', [('reply:微软', 'off'), ('微软', 'on')])
-def test_expired_clarification_other_cases_still_raise(monkeypatch, value, flag):
-    monkeypatch.setenv('FINBOT_FP4_EXPIRED_CARD_REPLY', flag)
-    card = expired_card()
-    turn = direct.Turn(value, AgentRuntimeContext('custom', 'test', 'dummy'), emit, [],
-                       {'pending_request': card, 'requested_pending_id': card['id']})
-    with pytest.raises(ValueError, match='^pending_request_expired$'):
-        asyncio.run(turn.consent_reply())
-
-
-def test_expired_write_card_still_rejected(monkeypatch, disposable_database):
-    Base.metadata.create_all(engine, tables=[AgentConsent.__table__])
-    monkeypatch.setattr(consent, 'owner_credential_matches', lambda c: c == 'owner')
-    monkeypatch.setenv('FINBOT_FP4_EXPIRED_CARD_REPLY', 'on')
-    operations = [{'name': 'index', 'arguments': {}}]
-    card = consent.propose('owner', 'conversation', operations, {})
-    card['reason'] = 'write_confirmation'
-    with SessionLocal() as db:
-        row = db.get(AgentConsent, uuid.UUID(card['id']))
-        row.expires_at = datetime.now(UTC) - timedelta(minutes=1)
-        db.commit()
-    card['expires_at'] = (datetime.now(UTC) - timedelta(minutes=1)).isoformat()
-    ctx = AgentRuntimeContext('custom', 'test', 'dummy', identity_credential='owner', conversation_id='conversation')
-    turn = direct.Turn(card['choices'][0]['value'], ctx, emit, [],
-                       {'pending_request': card, 'requested_pending_id': card['id']})
-    with pytest.raises(consent.ConsentError, match='confirmation_expired'):
-        asyncio.run(turn.consent_reply())
-    assert 'pending_request_expired_reply' not in turn.audit

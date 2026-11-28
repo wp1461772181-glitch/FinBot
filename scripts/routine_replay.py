@@ -65,6 +65,8 @@ async def _press(credential: str, owner: str, task_id, base: str) -> list[dict]:
                 async for line in response.aiter_lines():
                     if line.startswith("event:"):
                         event = line[6:].strip()
+                    elif line.startswith("event:") is False and event == "answer_reset":
+                        answer = ""       # the kernel took back what it had streamed
                     elif line.startswith("data:") and event in ("delta", "done", "error"):
                         data = json.loads(line[5:])
                         if event == "delta":

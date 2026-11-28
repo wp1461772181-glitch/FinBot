@@ -48,9 +48,9 @@ def owner(monkeypatch, disposable_database, tmp_path):
         db.commit()
     # No deployment config file: only entries added here.
     monkeypatch.setenv("AGENT_MODELS_CONFIG", str(tmp_path / "models.yaml"))
-    from app.agent_workflow import consent, direct, tools
+    from app.agent_workflow import consent, tools
     import app.agent_chat_identity as identity
-    for module in (consent, direct, tools, identity):
+    for module in (consent, tools, identity):
         monkeypatch.setattr(module, "owner_credential_matches", lambda c: c == OWNER)
     return OWNER
 
@@ -76,7 +76,6 @@ async def _quiet(_event):
 
 def _turn(question, settings, *, recognizer, decider, executor=None, reasoning_effort=None):
     """One real Turn of a bot with injected model callbacks."""
-    from app.agent_workflow import direct
     from app.agent_workflow.state import AgentRuntimeContext
     context = AgentRuntimeContext("custom", "test", "dummy", identity_credential=OWNER, owner_hash=OWNER_HASH,
                                   conversation_id=settings["conversation_id"], intent_recognizer=recognizer,
@@ -169,85 +168,7 @@ def _apple_bot():
     return bots.turn_settings(OWNER_HASH, bot["id"])
 
 
-def test_apple_bot_answers_an_unnamed_revenue_question_for_apple_and_audits_the_source(owner):
-    settings = _apple_bot()
-    reads, payloads = [], []
-
-    def executor(name, args):
-        reads.append((name, args))
-        return {"ok": True, "data": [{"symbol": args.get("symbol"), "metric": "Revenues", "value": 391035000000,
-                                       "unit": "USD", "period": "FY2024", "source_url": "https://www.sec.gov/x"}]}
-
-    def recognizer(payload):
-        payloads.append(payload)
-        return {"category": "A", "days_back": None, "requested_actions": [], "metrics": ["revenue"]}
-    result = _turn("去年营收多少", settings, recognizer=recognizer,
-                   decider=lambda *_: {"content": "苹果去年营收 3910 亿美元 [1]。"}, executor=executor)
-    assert payloads[0]["default_company"]["symbol"] == "AAPL"
-    assert reads and reads[0][0] == "query_financials" and reads[0][1]["symbol"] == "AAPL"
-    audit = result["audit"]["default_company"]
-    assert audit["symbol"] == "AAPL" and audit["source"] == "bot_settings" and audit["bot_id"] == settings["bot_id"]
-
-
-def test_a_named_company_wins_over_the_bots_default(owner):
-    settings = _apple_bot()
-    reads = []
-
-    def executor(name, args):
-        reads.append((name, args))
-        return {"ok": True, "data": []}
-    result = _turn("微软去年营收多少", settings,
-                   recognizer=lambda _p: {"category": "A", "days_back": None, "requested_actions": [],
-                                          "symbol": "MSFT", "company": "微软", "metrics": ["revenue"]},
-                   decider=lambda *_: {"content": "没有找到。"}, executor=executor)
-    assert "default_company" not in result["audit"]
-    assert all(args.get("symbol") != "AAPL" for _, args in reads)
-
-
-def test_several_or_no_focus_companies_give_no_default(owner):
-    many = bots.create_bot(OWNER_HASH, {"name": "科技", "focus": {"companies": ["AAPL", "MSFT"], "theme": "AI"}})
-    assert many["default_company"] is None
-    payloads = []
-
-    def recognizer(payload):
-        payloads.append(payload)
-        return {"category": "A", "days_back": None, "requested_actions": [], "metrics": ["revenue"]}
-    result = _turn("去年营收多少", bots.turn_settings(OWNER_HASH, many["id"]), recognizer=recognizer,
-                   decider=lambda *_: {"content": "哪家公司？"}, executor=lambda *_: {"ok": True, "data": []})
-    assert "default_company" not in payloads[0] and "default_company" not in result["audit"]
-
-
 # --- tool scope ---------------------------------------------------------------------------------------------
-
-def test_a_tool_outside_the_bots_scope_is_not_offered_and_not_run(owner):
-    news = bots.create_bot(OWNER_HASH, {"name": "抓新闻", "tool_scope": ["web_research", "search_knowledge"]})
-    settings = bots.turn_settings(OWNER_HASH, news["id"])
-    offered, ran = [], []
-    steps = iter([_call("load_tools", {"categories": ["新闻与网页", "财报与SEC"]}, "c0"),
-                  _call("query_financials", {"symbol": "AAPL", "metrics": ["Revenues"]}, "c1"),
-                  _call("request_action", {"tool": "add_to_research_queue", "arguments": {"symbol": "AMD"},
-                                           "reason": "竞争对手"}, "c2"),
-                  {"content": "只能查新闻。"}])
-
-    def decider(messages, schemas):
-        offered.append({s["function"]["name"] for s in schemas})
-        return next(steps)
-
-    def executor(name, args):
-        ran.append(name)
-        return {"ok": True, "data": []}
-    result = _turn("苹果最近有什么新闻", settings,
-                   recognizer=lambda _p: {"category": "D", "days_back": None,
-                                          "requested_actions": ["add_to_research_queue"]},
-                   decider=decider, executor=executor)
-    assert offered and all(names <= settings["tool_scope"] for names in offered)
-    # Loading a category brings in only what the scope allows: web_research yes, query_financials never.
-    assert "web_research" not in offered[0] and all("query_financials" not in names for names in offered)
-    assert "web_research" in offered[1]
-    assert "query_financials" not in ran and "add_to_research_queue" not in ran
-    assert result["audit"]["out_of_scope_calls"] == ["query_financials"]
-    assert not result.get("pending_request")  # no card for a tool the bot may not use
-
 
 def test_invoke_refuses_out_of_scope_tools_even_when_called_directly(owner):
     from app.agent_workflow import tools
@@ -407,8 +328,8 @@ def test_bot_turn_uses_the_catalog_model_and_a_changed_model_applies_on_the_next
     assert client.post("/agent-chat/stream", headers=H, json={"message": "hi"}).status_code == 422
 
 
-@pytest.mark.parametrize("kernel, flag, extracted", [(True, "on", 0), (True, "off", 1), (False, "on", 1), (False, "off", 1)])
-def test_the_side_extractor_stays_out_of_kernel_turns_only_while_the_memory_writes_flag_is_on(owner, client, monkeypatch, kernel, flag, extracted):
+@pytest.mark.parametrize("flag, extracted", [("on", 0), ("off", 1)])
+def test_the_side_extractor_stays_out_of_kernel_turns_only_while_the_memory_writes_flag_is_on(owner, client, monkeypatch, flag, extracted):
     catalog.save_entry("alpha", provider="deepseek", model="deepseek-chat", api_key=KEY_A, create=True, is_default=True)
     bot = client.post("/agent-chat/bots", headers=H, json={"name": "读财报", "model": "alpha"}).json()["bot"]
 
@@ -418,7 +339,6 @@ def test_the_side_extractor_stays_out_of_kernel_turns_only_while_the_memory_writ
     import app.agent_chat_stream as stream
     calls = []
     monkeypatch.setattr(stream, "stream_workflow", stream_workflow)
-    monkeypatch.setattr(stream, "kernel_turn", lambda bot_: kernel)
     monkeypatch.setenv("FINBOT_KERNEL_MEMORY_WRITES", flag)
     monkeypatch.setattr("app.agent_context_summary.schedule_summary", lambda *a, **k: None)
     monkeypatch.setattr("app.agent_profile_extract.schedule_extraction", lambda *a, **k: calls.append(a))
@@ -530,31 +450,6 @@ def test_bot_model_must_be_a_catalog_entry_whose_key_is_configured(owner, client
     no_key = client.patch(f"/agent-chat/bots/{bot_id}", headers=H, json={"model": "nokey"})
     assert no_key.status_code == 422 and no_key.json()["detail"] == "model_key_missing"
     assert client.get(f"/agent-chat/bots/{bot_id}", headers=H).json()["bot"]["model"] is None
-
-
-def test_a_bot_effort_reaches_the_turn_and_the_provider_request_and_the_audit(owner, client, monkeypatch):
-    from app.agent_workflow import direct
-    monkeypatch.setenv("AGENT_REASONING_EFFORT", "low")
-    catalog.save_entry("alpha", provider="openrouter", model="test/model", api_key=KEY_A, create=True, is_default=True)
-    bot = bots.create_bot(OWNER_HASH, {"name": "思考-" + uuid.uuid4().hex[:6], "model": "alpha", "reasoning_effort": "high"})
-    settings = bots.turn_settings(OWNER_HASH, bot["id"])
-    assert settings["reasoning_effort"] == "high"
-    sent = []
-
-    async def fake_decision(provider, model, key, messages, schemas, base_url=None, **kwargs):
-        sent.append(kwargs)
-        return {"usage": {}}, {"content": "好的。"}
-    monkeypatch.setattr(direct, "decision_request", fake_decision)
-    from app.agent_workflow.state import AgentRuntimeContext
-    context = AgentRuntimeContext("openrouter", "test/model", "dummy", identity_credential=OWNER, owner_hash=OWNER_HASH,
-                                  conversation_id=settings["conversation_id"], bot_id=settings["bot_id"],
-                                  reasoning_effort=settings["reasoning_effort"])
-    turn = direct.Turn("hi", context, _quiet, [], None)
-    asyncio.run(turn.provider_request([{"role": "user", "content": "hi"}], []))
-    assert sent == [{"reasoning_effort": "high"}]
-    result = _turn("hi", settings, recognizer=lambda _p: {"category": "B", "days_back": None, "requested_actions": [], "metrics": []},
-                   decider=lambda *_: {"content": "好的。"}, reasoning_effort="high")
-    assert result["audit"]["model"] == "test" and result["audit"]["reasoning_effort"] == "high"
 
 
 def test_the_stream_hands_the_bots_saved_effort_to_the_workflow_on_each_turn(owner, client, monkeypatch):

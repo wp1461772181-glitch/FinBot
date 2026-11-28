@@ -46,8 +46,7 @@ def owner(monkeypatch, disposable_database):
         db.query(AgentTask).delete()
         db.commit()
     import app.agent_chat_identity as identity
-    from app.agent_workflow import direct
-    for module in (consent, direct, tools, identity):
+    for module in (consent, tools, identity):
         monkeypatch.setattr(module, "owner_credential_matches", lambda c: c == OWNER)
     import app.kernel.act as kernel_act
     monkeypatch.setattr(kernel_act, "owner_credential_matches", lambda c: c == OWNER)
@@ -177,8 +176,8 @@ def stub_catalog(monkeypatch, *names, keyless=()):
 
 def test_analyze_card_names_the_model_and_a_wrong_name_makes_no_card(monkeypatch):
     stub_catalog(monkeypatch, "glm5.3-flash", "nokey", keyless=("nokey",))
-    from app.agent_workflow import direct
-    monkeypatch.setattr(direct, "source_display_title", lambda kind, source_id: "Apple 10-K")
+    from app.agent_workflow import write_text
+    monkeypatch.setattr(write_text, "source_display_title", lambda kind, source_id: "Apple 10-K")
     out = run(act.prepare(make_run(), "analyze", {"symbol": "AAPL", "source_id": SOURCE, "catalog_model": "glm5.3-flash", "force": True}))
     assert out.tier == 3 and "GLM5.3-FLASH" in out.display["alternative"] and "vendor/glm5.3-flash" in out.display["alternative"]
     assert "重新" in out.display["alternative"] and "sk-secret" not in json.dumps(out.operation) + json.dumps(out.display)

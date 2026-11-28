@@ -54,9 +54,9 @@ def owner(monkeypatch, disposable_database):
         for model in (AgentInboxItem, AgentTask, AgentBackgroundModel, AgentResearchQueue, AgentConsent):
             db.query(model).delete()
         db.commit()
-    from app.agent_workflow import direct, tools
+    from app.agent_workflow import tools
     import app.agent_chat_identity as identity
-    for module in (consent, direct, tools, identity):
+    for module in (consent, tools, identity):
         monkeypatch.setattr(module, "owner_credential_matches", lambda c: c == OWNER)
     return OWNER
 
@@ -256,142 +256,8 @@ def _call(name, arguments, call_id):
     return {"tool_calls": [{"id": call_id, "function": {"name": name, "arguments": json.dumps(arguments, ensure_ascii=False)}}]}
 
 
-def _fake_workflow(monkeypatch, *, recognizer, decider, executor, seen):
-    """graph.stream_workflow with the real Turn, injected model callbacks and no checkpointer."""
-    from app.agent_workflow import direct, graph
-    from app.agent_workflow.state import AgentRuntimeContext
-
-    async def stream_workflow(*, question, messages, provider, model, api_key, base_url, owner_hash, conversation_id,
-                              identity_credential="", turn_id="", profile_block=None, unattended=False,
-                              token_budget=None, action_sink=None, **_):
-        seen.append({"unattended": unattended, "token_budget": token_budget, "key": api_key, "model": model})
-        context = AgentRuntimeContext(provider, model, api_key, base_url=base_url, owner_hash=owner_hash,
-                                      conversation_id=conversation_id, identity_credential=identity_credential,
-                                      intent_recognizer=recognizer, decider=decider, executor=executor,
-                                      profile_block=profile_block, unattended=unattended, token_budget=token_budget,
-                                      action_sink=action_sink)
-        events = []
-
-        async def emit(event):
-            events.append(event)
-        result = await direct.run_direct_turn(question, context, emit=emit)
-        for event in events:
-            yield event
-        yield {"event": "delta", "text": result["answer"]}
-        yield {"event": "done", "status": result.get("status"), "reason": result.get("reason"),
-               "citations": result.get("citations", []), "pending_request": result.get("pending_request"),
-               "final_protocol": {}, "audit": result.get("audit", {})}
-    monkeypatch.setattr(graph, "stream_workflow", stream_workflow)
-
-
 def _with_key():
     tasks.save_background_model(OWNER_HASH, provider="deepseek", model="deepseek-chat", base_url=None, api_key=KEY)
-
-
-def test_unattended_write_goes_to_the_inbox_and_runs_only_after_the_card_is_pressed(owner, monkeypatch):
-    _with_key()
-    executed = []
-
-    def executor(name, args):
-        executed.append(name)
-        return {"ok": True, "data": [{"status": "queued", "job_id": "j1", "job_status": "queued"}]}
-    steps = iter([
-        # A direct write first (the task's words say 抓取): refused, never converted into a card.
-        _call("fetch_sec", {"symbol": "NVDA", "form": "10-Q"}, "c1"),
-        # Then the suggestion path: it must land in the inbox, not in a card here.
-        _call("request_action", {"tool": "add_to_research_queue", "arguments": {"symbol": "AMD"}, "reason": "AMD 是 NVDA 的主要对手"}, "c2"),
-        {"content": "研究队列今天没有可引用的新资料。"},
-    ])
-    seen = []
-    # The classifier is fooled into granting the writes the task's words mention.
-    _fake_workflow(monkeypatch, recognizer=lambda _p: {"category": "D", "days_back": None,
-                                                       "requested_actions": ["fetch_sec", "add_to_research_queue"]},
-                   decider=lambda *_: next(steps), executor=executor, seen=seen)
-    task = tasks.create_task(OWNER_HASH, _brief(instruction="每天抓取研究队列的新 10-Q，有新的对手就加入研究队列。", scope="symbols",
-                                                symbols=["NVDA"]), now=at(2026, 10, 30, 7, 0))
-    status = run(runner.run_due(now=at(2026, 10, 30, 8, 0), credential=OWNER))
-    assert status == {task["id"]: "no_evidence"}
-    assert seen[0]["unattended"] is True and seen[0]["key"] == KEY
-    assert executed == []
-    with SessionLocal() as db:
-        assert db.query(AgentConsent).count() == 0  # no capability was minted while nobody was there
-    confirm = tasks.list_inbox(OWNER_HASH, section="confirm")
-    assert len(confirm) == 1 and confirm[0]["kind"] == "action" and confirm[0]["status"] == "unread"
-    assert "这是 Agent 的建议" in confirm[0]["title"]
-    assert "operation" not in confirm[0]["payload"]  # the list shows what it is, not the stored operation
-    # Stage C: an empty run posts nothing (no brief, nothing in the bot's line).
-    assert tasks.list_inbox(OWNER_HASH, section="brief") == []
-    assert _task(task["id"]).last_status == "no_evidence"
-
-    # The owner asks for the card later: a fresh capability in the run's conversation, still nothing executed.
-    from app.agent_workflow import graph
-    pending = {}
-
-    async def set_pending(owner_hash_, conversation, card):
-        pending.update(owner=owner_hash_, conversation=conversation, card=card)
-    monkeypatch.setattr(graph, "set_pending_request", set_pending)
-    minted = run(tasks.mint_card(OWNER, confirm[0]["id"]))
-    card = pending["card"]
-    assert minted["conversation_id"] == confirm[0]["conversation_id"] == pending["conversation"]
-    assert card["display"]["agent_suggestion"] is True and card["choices"][0]["label"] == "批准并执行"
-    assert executed == []
-    from app.agent_chat_store import owned_messages
-    stored = run(owned_messages(minted["conversation_id"], OWNER))
-    assert stored[-2]["role"] == "user" and stored[-2]["content"].startswith(tasks.CARD_REQUEST)
-    assert stored[-1]["tool_calls"]["clarification"]["request_id"] == card["id"]
-
-    # The press executes exactly once; a second press replays.
-    from app.agent_workflow import direct
-    from app.agent_workflow.state import AgentRuntimeContext
-    context = AgentRuntimeContext("custom", "test", "dummy", identity_credential=OWNER, owner_hash=OWNER_HASH,
-                                  conversation_id=minted["conversation_id"], executor=executor)
-
-    async def quiet(_event):
-        pass
-    for _ in range(2):
-        asyncio.run(direct.run_direct_turn(card["choices"][0]["value"], context, emit=quiet,
-                                           state={"pending_request": card, "requested_pending_id": card["id"]}))
-    assert executed == ["add_to_research_queue"]
-
-
-def test_unattended_turn_offers_no_write_tool_and_says_so_in_the_prompt(owner):
-    from app.agent_workflow import direct
-    from app.agent_workflow.state import AgentRuntimeContext
-    captured = []
-
-    def decider(messages, schemas):
-        captured.append((messages, schemas))
-        return {"content": "没有新资料。"}
-    sink = []
-    context = AgentRuntimeContext("custom", "test", "dummy", identity_credential=OWNER, owner_hash=OWNER_HASH,
-                                  conversation_id=str(uuid.uuid4()), decider=decider, unattended=True, action_sink=sink,
-                                  intent_recognizer=lambda _p: {"category": "D", "days_back": None,
-                                                                "requested_actions": ["import", "fetch_sec"]})
-
-    async def quiet(_event):
-        pass
-    asyncio.run(direct.run_direct_turn("导入并抓取 NVDA 的最新 10-K", context, emit=quiet))
-    messages, schemas = captured[0]
-    offered = {s["function"]["name"] for s in schemas}
-    from app.agent_tool_catalog import definitions
-    writes = {n for n, p in definitions().items() if p.level in {"reversible", "costly"}}
-    assert not offered & writes and "request_action" in offered
-    assert direct.UNATTENDED_NOTE in messages[0]["content"]
-
-
-def test_ask_user_is_refused_when_nobody_is_there(owner):
-    from app.agent_workflow import direct
-    from app.agent_workflow.state import AgentRuntimeContext
-    steps = iter([_call("ask_user", {"question": "哪家公司？", "options": ["苹果", "微软"]}, "c1"), {"content": "无资料。"}])
-    context = AgentRuntimeContext("custom", "test", "dummy", identity_credential=OWNER, owner_hash=OWNER_HASH,
-                                  conversation_id=str(uuid.uuid4()), decider=lambda *_: next(steps), unattended=True,
-                                  action_sink=[], intent_recognizer=lambda _p: {"category": "D", "days_back": None,
-                                                                                "requested_actions": []})
-
-    async def quiet(_event):
-        pass
-    result = asyncio.run(direct.run_direct_turn("简报", context, emit=quiet))
-    assert result["status"] != "waiting_for_input" and not result.get("pending_request")
 
 
 # --- background key -------------------------------------------------------------------------------
@@ -555,22 +421,6 @@ def test_a_failed_run_is_retried_once_but_never_after_it_queued_a_write(owner, m
     _set(task["id"], next_run_at=at(2026, 11, 3, 8, 0))
     run(runner.run_due(now=at(2026, 11, 3, 8, 0), credential=OWNER))
     assert len(calls) == 1
-
-
-def test_per_run_cap_stops_gathering_and_a_hard_multiple_stops_model_calls():
-    from app.agent_workflow import direct
-    from app.agent_workflow.state import AgentRuntimeContext
-
-    async def quiet(_event):
-        pass
-    turn = direct.Turn("q", AgentRuntimeContext("custom", "m", "k", token_budget=1000), quiet, [], {})
-    assert turn.token_cap() == 1000
-    turn.audit["token_usage"] = 1001
-    assert turn.budget() == "turn_budget"
-    turn.audit["token_usage"] = 1500
-    with pytest.raises(ValueError, match="task_token_cap"):
-        asyncio.run(turn.model([{"role": "user", "content": "q"}], []))
-    assert direct.Turn("q", AgentRuntimeContext("custom", "m", "k"), quiet, [], {}).token_cap() == direct.SOFT_TURN_TOKENS
 
 
 # --- alerts ---------------------------------------------------------------------------------------

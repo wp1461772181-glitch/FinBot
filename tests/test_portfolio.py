@@ -123,9 +123,9 @@ def owner(monkeypatch, disposable_database, tmp_path):
                                              ).delete(synchronize_session=False)
         db.query(MarketPrice).filter(MarketPrice.symbol.in_(["INTC", "AAPL"])).delete(synchronize_session=False)
         db.commit()
-    from app.agent_workflow import direct, tools
+    from app.agent_workflow import tools
     import app.agent_chat_identity as identity
-    for module in (consent, direct, tools, identity):
+    for module in (consent, tools, identity):
         monkeypatch.setattr(module, "owner_credential_matches", lambda c: c == OWNER)
     import app.agent_chat_stream as stream
     monkeypatch.setattr("app.agent_chat_identity.owner_credential_matches", lambda c: c == OWNER)
@@ -279,8 +279,6 @@ def _context(bot, **kwargs):
 
 def _turn(question, context, **kwargs):
     from app import agent_chat_store as store
-    from app.agent_workflow import direct
-
     async def run():
         try:
             return await direct.run_direct_turn(question, context, emit=_quiet, **kwargs)
@@ -326,56 +324,6 @@ def test_guest_cannot_read(owner, client):
     assert client.get("/agent-chat/portfolio", headers={"X-Chat-Session": "a-guest"}).status_code == 403
 
 
-def test_trade_by_conversation_makes_a_card_then_records_once(owner):
-    finbot = bots.create_bot(OWNER_HASH, {"name": "FinBot"})
-    args = {"kind": "buy", "symbol": "INTC", "quantity": 100, "price": 80, "occurred_on": "2026-10-01"}
-    context = _context(finbot, decider=_proposer("record_trade", args), intent_recognizer=_route("record_trade"))
-    waiting = _turn("我买了 100 股 INTC，成本 80", context)
-    card = waiting["pending_request"]
-    assert card["display"]["title"] == "记录买入 · INTC" and count() == 0  # nothing before the press
-    assert "8000.00" in card["display"]["alternative"]
-    done = _press(card, _context(finbot, decider=lambda *_: {"content": "已记录。"}))
-    assert count() == 1, done
-    with SessionLocal() as db:
-        row = db.query(PortfolioTransaction).one()
-    assert (row.symbol, row.kind, row.quantity, row.price, row.amount) == ("INTC", "buy", D("100"), D("80"), D("8000"))
-
-
-def test_confirm_card_replay_no_double_entry(owner):
-    finbot = bots.create_bot(OWNER_HASH, {"name": "FinBot"})
-    args = {"kind": "buy", "symbol": "INTC", "quantity": 100, "price": 80, "occurred_on": "2026-10-01"}
-    context = _context(finbot, decider=_proposer("record_trade", args), intent_recognizer=_route("record_trade"))
-    card = _turn("我买了 100 股 INTC，成本 80", context)["pending_request"]
-    after = _context(finbot, decider=lambda *_: {"content": "已记录。"})
-    _press(card, after)
-    try:
-        _press(card, after)  # the same card pressed again: refused or answered from the saved result, never run again
-    except Exception:
-        pass
-    assert count() == 1
-    # the same at the consent layer: a second execute returns the saved result and runs nothing
-    from app.agent_workflow import tools
-    operation = {"name": "record_trade", "arguments": {"kind": "buy", "symbol": "AAPL", "quantity": 1, "price": 10, "occurred_on": "2026-10-02"}}
-    proposed = consent.propose(OWNER, finbot["conversation_id"], [operation], {"title": "t"})
-    token = proposed["choices"][0]["value"].split(":", 1)[1]
-    ctx = _context(finbot)
-
-    def handler(op, key):
-        return asyncio.run(tools.execute_reversible(op, key, ctx))
-    first = consent.execute(OWNER, finbot["conversation_id"], token, [operation], handler)
-    second = consent.execute(OWNER, finbot["conversation_id"], token, [operation], handler)
-    assert first == second and first["ok"] and count() == 2
-
-
-def test_a_sell_over_holdings_by_conversation_makes_no_card(owner):
-    record(kind="buy", symbol="INTC", quantity=10, price=50, occurred_on="2026-10-01")
-    finbot = bots.create_bot(OWNER_HASH, {"name": "FinBot"})
-    args = {"kind": "sell", "symbol": "INTC", "quantity": 50, "price": 60}
-    context = _context(finbot, decider=_proposer("record_trade", args), intent_recognizer=_route("record_trade"))
-    result = _turn("我卖了 50 股 INTC，价格 60", context)
-    assert not result.get("pending_request") and count() == 1
-
-
 def test_query_portfolio_rows_carry_portfolio_citations_with_every_figure(owner):
     from app.agent_workflow.evidence import number_rows, unsupported_number_values
     record(kind="deposit", amount=10000, occurred_on="2026-09-30")
@@ -400,31 +348,6 @@ def test_query_portfolio_rows_carry_portfolio_citations_with_every_figure(owner)
     answer = "INTC 持有 100 股，平均成本 80.01，最新价 92，浮动盈利 1199 [2]。可用资金 1999 [1]。"
     assert unsupported_number_values(answer, citations) == []
     assert unsupported_number_values("INTC 浮动盈利 5000 [2]。", citations) == [5000.0]
-
-
-def test_a_question_about_the_portfolio_is_answered_with_numbers_that_pass_verification(owner):
-    """「我今天赚了多少」: query_portfolio is read, its rows are numbered [n], and the answer's figures are held to them."""
-    record(kind="deposit", amount=10000, occurred_on="2026-09-30")
-    record(kind="buy", symbol="INTC", quantity=100, price=80, fee=1, occurred_on="2026-09-30")
-    price("INTC", date(2026, 10, 1), 90.0)
-    price("INTC", date(2026, 10, 2), 92.0)
-    finbot = bots.create_bot(OWNER_HASH, {"name": "FinBot"})
-    good = "今天 INTC 持仓盈亏 200 [2]，可用资金 1999 [1]。"
-    bad = "今天 INTC 持仓盈亏 777 [2]。"
-
-    def run(answer):
-        steps = iter([_call("query_portfolio", {}), {"content": answer}, {"content": answer}, {"content": answer}])
-        context = _context(finbot, decider=lambda *_: next(steps),
-                           intent_recognizer=lambda _p: {"category": "A", "mode": "none", "days_back": None, "requested_actions": []})
-        return _turn("我今天赚了多少", context)
-    kept = run(good)
-    assert kept["status"] == "succeeded" and kept["answer"] == good
-    assert {c["source_type"] for c in kept["citations"]} == {"portfolio"}
-    dropped = run(bad)  # 777 is in no portfolio row
-    # S0: the check no longer changes status or the visible lines; its verdict is audit-only.
-    assert dropped["status"] == "succeeded" and "777" in dropped["answer"] and dropped["unverified_lines"] == []
-    assert dropped["audit"]["legacy_review"]["unverified_lines"][0]["numbers"][0].startswith("777")
-    assert dropped["audit"]["stop_reason"] is None
 
 
 def test_zz_leaves_a_price_revision_behind_for_a_shared_database(owner):

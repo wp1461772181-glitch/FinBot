@@ -31,8 +31,8 @@ def run(coro):
 def line(owner, monkeypatch):
     """One conversation of his with one answered turn; returns (conversation id, its turn id, the answer's id, when it was written)."""
     import app.agent_chat_identity as identity
-    from app.agent_workflow import direct, tools
-    for module in (consent, direct, tools, identity, act):
+    from app.agent_workflow import tools
+    for module in (consent, tools, identity, act):
         monkeypatch.setattr(module, "owner_credential_matches", lambda c: c == OWNER, raising=False)
     with SessionLocal() as db:
         db.query(feedback.AnswerFeedback).delete()

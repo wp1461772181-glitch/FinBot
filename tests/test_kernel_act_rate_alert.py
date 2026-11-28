@@ -52,8 +52,8 @@ def owner(monkeypatch, disposable_database, tmp_path):
                                              AgentTelegramMessage.__table__, DutyLog.__table__, DutyBrief.__table__])
     wipe()
     import app.agent_chat_identity as identity
-    from app.agent_workflow import direct, tools
-    for module in (consent, direct, tools, identity, act):
+    from app.agent_workflow import tools
+    for module in (consent, tools, identity, act):
         monkeypatch.setattr(module, "owner_credential_matches", lambda c: c == OWNER, raising=False)
     path = tmp_path / "sentinel.db"
     monkeypatch.setenv("SENTINEL_DB_PATH", str(path))

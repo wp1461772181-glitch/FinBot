@@ -19,7 +19,6 @@ from sqlalchemy import delete
 
 from app.agent_chat_store import owner_hash
 from app.database import SessionLocal
-from app.agent_workflow.direct import Turn, run_direct_turn
 from app.agent_workflow.models import AgentConsent, AgentWebSource
 from app.agent_workflow.state import AgentRuntimeContext
 from scripts import run_telegram_bridge as bridge
@@ -117,59 +116,3 @@ def test_a_button_the_bridge_never_minted_still_says_expired(monkeypatch):
     assert calls["asked"] == [] and calls["sent"] == ["这张确认卡已经过期了（每张卡只能用一次）。"]
 
 
-@pytest.mark.parametrize("route", ["A", "D"])
-def test_the_report_of_an_executed_save_survives_the_enforced_claim_gate(monkeypatch, route):
-    monkeypatch.setenv("CLAIM_QUOTE_GATE", "enforce")
-    card = {"id": "req-1", "reason": "write_confirmation", "original_question": "都保存",
-            "display": {"targets": [{"symbol": "TSLA", "title": TITLE, "web_date": "2026-10-22"}]},
-            "choices": [{"label": "同意", "value": "confirm:tok"}]}
-
-    async def model(messages, tools, **kwargs):
-        return {"content": REPORT}
-
-    turn = Turn("confirm:tok", AgentRuntimeContext("custom", "test", "dummy"), None, [],
-                {"pending_request": card, "requested_pending_id": "req-1"})
-    turn.model = model
-    turn.route = route  # set by the resumed answer before it fell back to the report
-    result = asyncio.run(turn.report_execution({"ok": True, "data": [
-        {"status": "created", "title": TITLE, "source_id": "8c1f0f4e-0000-4000-8000-000000000000"}]}))
-    assert result["status"] == "succeeded" and result["answer"] == REPORT
-
-
-def test_agree_on_the_save_all_card_reports_the_save_under_the_enforced_gate(owned, monkeypatch):
-    """The live sequence through Turn.run: 「都保存」 mints one card for both items, the press executes it."""
-    monkeypatch.setenv("CLAIM_QUOTE_GATE", "enforce")
-    state = _state()
-    rows = state["result_sets"][0]["rows"]
-    rows[0]["title"] = TITLE
-    result, _ = _run([_call("ingest_web_source", url=rows[0]["url"]), _call("ingest_web_source", url=rows[1]["url"])],
-                     state=state, question="都保存")
-    card = result["pending_request"]
-    assert card["reason"] == "write_confirmation" and "全部操作" in result["answer"]
-    token = next(c["value"] for c in card["choices"] if c["value"].startswith("confirm:"))
-
-    async def execute(name, args):
-        return {"ok": True, "data": [{"status": "created", "title": TITLE,
-                                      "source_id": "8c1f0f4e-0000-4000-8000-000000000000"}]}
-
-    async def decide(messages, *_):
-        return {"content": REPORT}
-
-    context = AgentRuntimeContext(
-        "custom", "test", "dummy", owner_hash=owner_hash("owner"), conversation_id="c", identity_credential="owner",
-        classifier=lambda q: {"category": "D", "requested_actions": ["ingest_web_source"], "company": "Tesla",
-                              "symbol": "TSLA"},
-        decider=decide, executor=execute, answerer=lambda *_: REPORT, resolver=lambda _: {"relationship": "new"})
-    pressed_state = {**state, "pending_request": card, "requested_pending_id": card["id"],
-                     "previous_scope": result.get("previous_scope", {}),
-                     "previous_category": result.get("previous_category")}
-    try:
-        pressed = asyncio.run(run_direct_turn(token, context, emit=lambda _: asyncio.sleep(0), state=pressed_state))
-    finally:
-        # The live-shape tests share conversation "c" and these pages' excerpt: leave no card or save behind.
-        with SessionLocal() as db:
-            db.execute(delete(AgentConsent).where(AgentConsent.conversation_id == "c"))
-            db.execute(delete(AgentWebSource).where(AgentWebSource.owner_hash == owner_hash("owner")))
-            db.commit()
-    assert pressed["audit"]["write_outcome"] == "executed"
-    assert "无法与来源核实" not in pressed["answer"] and pressed["status"] != "failed"

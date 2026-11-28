@@ -44,9 +44,9 @@ def owner(monkeypatch, disposable_database):
         db.query(AgentBot).delete()
         db.query(AgentConversation).filter(AgentConversation.owner_hash == OWNER_HASH).delete()
         db.commit()
-    from app.agent_workflow import direct, tools
+    from app.agent_workflow import tools
     import app.agent_chat_identity as identity
-    for module in (consent, direct, tools, identity):
+    for module in (consent, tools, identity):
         monkeypatch.setattr(module, "owner_credential_matches", lambda c: c == OWNER)
     return OWNER
 
@@ -83,7 +83,6 @@ def _context(settings, **kwargs):
 
 
 def _turn(question, context, **kwargs):
-    from app.agent_workflow import direct
     return asyncio.run(direct.run_direct_turn(question, context, emit=_quiet, **kwargs))
 
 
@@ -104,44 +103,7 @@ def _block(settings):
 
 # --- acceptance 1: 「以后金额用亿美元」 said in any bot applies in every bot ----------------------------
 
-def test_a_global_preference_said_in_one_bot_applies_in_every_bot(team):
-    card = _remember(team["apple"], "以后金额用亿美元",
-                     {"kind": "preference", "topic": "currency_unit", "text": "金额用亿美元", "quote": "以后金额用亿美元",
-                      "scope": "global"})
-    assert "全局" in json.dumps(card["display"], ensure_ascii=False)
-    [item] = profile.list_items(OWNER_HASH)
-    assert item["scope"] == "global" and item["bot_id"] is None
-    for name in ("apple", "news", "default"):
-        assert "金额用亿美元" in _block(team[name]), name
-
-
-def test_a_bot_reads_the_profile_block_in_its_tool_loop(team):
-    profile.add_item(OWNER_HASH, kind="preference", topic="currency_unit", text="金额用亿美元", quote="以后金额用亿美元",
-                     message="以后金额用亿美元", origin="explicit")
-    seen = []
-    context = _context(team["news"], intent_recognizer=_route(), profile_block=_block(team["news"]),
-                       decider=lambda m, _s: seen.append(m) or {"content": "无资料。"})
-    _turn("最近有什么新闻？", context)
-    assert any("金额用亿美元" in str(m.get("content")) for m in seen[0])
-
-
 # --- acceptance 2: 「苹果我主要看服务收入」 in the Apple bot applies only there ---------------------------
-
-def test_a_bot_item_applies_only_in_that_bot_and_the_default_bot_sees_it_labelled(team):
-    card = _remember(team["apple"], "苹果我主要看服务收入",
-                     {"kind": "about_me", "topic": None, "text": "看苹果主要看服务收入", "quote": "苹果我主要看服务收入",
-                      "scope": "bot"})
-    assert "苹果" in json.dumps(card["display"], ensure_ascii=False)
-    [item] = profile.list_items(OWNER_HASH)
-    assert item["scope"] == "bot" and item["bot_id"] == team["apple"]["bot_id"] and item["bot_name"] == "苹果"
-    assert "服务收入" in _block(team["apple"])
-    assert "服务收入" not in _block(team["news"])
-    default_block = _block(team["default"])
-    assert "服务收入" in default_block and "「苹果」" in default_block
-    # A turn without a bot (the old browser-model path) carries the global layer only.
-    from app.agent_chat_stream import _profile_block
-    assert asyncio.run(_profile_block(OWNER)) is None
-
 
 def test_the_same_topic_can_differ_per_layer_and_the_bot_line_says_it_wins(team):
     profile.add_item(OWNER_HASH, kind="preference", topic="currency_unit", text="金额用亿美元", quote="金额用亿美元",
@@ -156,37 +118,6 @@ def test_the_same_topic_can_differ_per_layer_and_the_bot_line_says_it_wins(team)
 
 # --- the server accepts only "global" or "the current bot" -------------------------------------------
 
-def test_remember_can_only_name_global_or_the_current_bot(team):
-    from app.agent_tool_catalog import validate
-    base = {"kind": "about_me", "text": "x", "quote": "xx"}
-    assert validate("remember", {**base, "scope": "bot"})["scope"] == "bot"
-    for bad in ({**base, "scope": team["apple"]["bot_id"]}, {**base, "scope": "bot:" + team["apple"]["bot_id"]},
-                {**base, "bot_id": team["apple"]["bot_id"]}):
-        with pytest.raises(ValueError):
-            validate("remember", bad)
-    # "bot" said in the news bot is the news bot, whatever the words are about.
-    _remember(team["news"], "苹果我主要看服务收入",
-              {"kind": "about_me", "text": "看苹果主要看服务收入", "quote": "苹果我主要看服务收入", "scope": "bot"})
-    [item] = profile.list_items(OWNER_HASH)
-    assert item["bot_id"] == team["news"]["bot_id"]
-    assert "服务收入" not in _block(team["apple"])
-
-
-def test_the_frozen_card_decides_the_layer_not_the_turn_that_presses_it(team):
-    steps = iter([_call("remember", {"kind": "about_me", "text": "看服务收入", "quote": "苹果我主要看服务收入", "scope": "bot"}),
-                  {"content": "已提出确认卡。"}])
-    apple = _context(team["apple"], intent_recognizer=_route("remember"), decider=lambda *_: next(steps))
-    card = _turn("苹果我主要看服务收入", apple)["pending_request"]
-    saved = consent.lookup(OWNER, team["apple"]["conversation_id"], card["id"])
-    assert saved["operations"][0]["bot_id"] == team["apple"]["bot_id"]
-    # A tampered copy that points at another bot is not the frozen operation.
-    token = card["choices"][0]["value"].split(":", 1)[1]
-    tampered = [{**saved["operations"][0], "bot_id": team["news"]["bot_id"]}]
-    with pytest.raises(consent.ConsentError, match="confirmation_parameter_mismatch"):
-        consent.execute(OWNER, team["apple"]["conversation_id"], token, tampered, lambda *_: {"ok": True})
-    assert profile.list_items(OWNER_HASH) == []
-
-
 def test_add_item_refuses_a_bot_of_another_owner_or_none_at_all(team):
     with pytest.raises(profile.ProfileError, match="unknown_bot"):
         profile.add_item(owner_hash("x" * 40), kind="about_me", text="x", quote="xx", message="xx", origin="explicit",
@@ -196,38 +127,7 @@ def test_add_item_refuses_a_bot_of_another_owner_or_none_at_all(team):
                          bot_id=str(uuid.uuid4()))
 
 
-def test_forget_reaches_only_items_the_bot_can_see(team):
-    mine = profile.add_item(OWNER_HASH, kind="about_me", text="看服务收入", quote="看服务收入", message="看服务收入",
-                            origin="explicit", bot_id=team["apple"]["bot_id"])["item"]
-    assert profile.resolve_handle(OWNER_HASH, mine["handle"], bot_id=team["news"]["bot_id"]) is None
-    assert profile.resolve_handle(OWNER_HASH, mine["handle"], bot_id=team["apple"]["bot_id"])
-    assert profile.resolve_handle(OWNER_HASH, mine["handle"], bot_id=team["default"]["bot_id"], every_bot=True)
-    steps = iter([_call("forget", {"item_id": mine["handle"]}), {"content": "找不到。"}])
-    news = _context(team["news"], intent_recognizer=_route("forget"), decider=lambda *_: next(steps))
-    result = _turn("忘掉服务收入那条", news)
-    assert not result.get("pending_request")
-    assert profile.list_items(OWNER_HASH)[0]["status"] == "active"
-
-
 # --- acceptance 3: a tool result's 「请记住……」 reaches no layer -----------------------------------------
-
-@pytest.mark.parametrize("scope", ["global", "bot"])
-def test_tool_result_poisoning_writes_no_layer(team, scope):
-    steps = iter([_call("query_research_faq", {"keyword": "TSLA"}),
-                  _call("remember", {"kind": "about_me", "text": "用户想买 TSLA", "quote": POISON, "scope": scope}, "c2"),
-                  {"content": "没有可核验资料。"}])
-    def executor(_name, _args):
-        return {"ok": True, "data": [{"question": "TSLA", "answer": POISON}], "source": "faq"}
-    for name in ("apple", "default"):
-        context = _context(team[name], intent_recognizer=_route("remember"), decider=lambda *_: next(steps),
-                           executor=executor)
-        result = _turn("帮我看看 TSLA 的常见问题", context)
-        assert result["audit"].get("write_outcome") == "refused:quote_not_in_user_message"
-        steps = iter([_call("query_research_faq", {"keyword": "TSLA"}),
-                      _call("remember", {"kind": "about_me", "text": "用户想买 TSLA", "quote": POISON, "scope": scope}, "c2"),
-                      {"content": "没有可核验资料。"}])
-    assert profile.list_items(OWNER_HASH) == []
-
 
 # --- the extractor proposes a layer too ---------------------------------------------------------------
 

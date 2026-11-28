@@ -14,7 +14,7 @@ import pytest
 
 from app.agent_recall import note
 from app.agent_system_prompt import INSTRUCTION, SELF_STATE_SENTENCE
-from app.agent_workflow import direct, tools
+from app.agent_workflow import tools
 from app.agent_workflow.claim_shadow_extract import select_sentences
 from app.agent_workflow.state import AgentRuntimeContext
 from test_sw1b_closing_complete import text
@@ -44,9 +44,7 @@ def _rag_scope():
 
 def _run(monkeypatch, *, owner, tool_scope=None):
     """One rag turn whose model answers at once; returns the turn and the first request's offered tools and messages."""
-    from app.agent_workflow.direct import Turn
     seen_tools, seen_messages = [], []
-    monkeypatch.setattr(direct, "owner_credential_matches", lambda c: c == OWNER)
     monkeypatch.setattr(tools, "owner_credential_matches", lambda c: c == OWNER)
     turns = []
     original = Turn.finish
@@ -69,37 +67,6 @@ def _run(monkeypatch, *, owner, tool_scope=None):
     return turns[-1], seen_tools[0], seen_messages[0]
 
 
-def test_owner_turn_offers_the_memory_tools_from_the_first_request(monkeypatch, disposable_database):
-    turn, offered, _ = _run(monkeypatch, owner=True)
-    assert MEMORY_TOOLS <= offered
-    assert "记忆与技能" in turn.audit["preloaded_categories"]
-
-
-def test_switch_off_keeps_the_memory_tools_out_of_the_preload(monkeypatch, disposable_database):
-    monkeypatch.setenv("FINBOT_SW2_MEMORY_PRELOAD", "off")
-    turn, offered, _ = _run(monkeypatch, owner=True)
-    assert not (MEMORY_TOOLS & offered)
-    assert "记忆与技能" not in turn.audit["preloaded_categories"]
-
-
-def test_guest_turn_never_gets_the_memory_tools(monkeypatch, disposable_database):
-    turn, offered, _ = _run(monkeypatch, owner=False)
-    assert not (MEMORY_TOOLS & offered)
-
-
-def test_bot_scope_without_the_memory_tools_neither_preloads_nor_offers_them(monkeypatch, disposable_database):
-    """B10: the visible filter keeps a bot's own scope, whatever the owner preload says."""
-    turn, offered, _ = _run(monkeypatch, owner=True, tool_scope=frozenset({"search_knowledge", "calculate", "query_financials"}))
-    assert not (MEMORY_TOOLS & offered)
-    assert "记忆与技能" not in turn.audit["preloaded_categories"]
-
-
-def test_self_state_sentence_is_in_the_instruction_the_model_sees(monkeypatch, disposable_database):
-    _, _, messages = _run(monkeypatch, owner=False)
-    system = "\n".join(str(m.get("content") or "") for m in messages if isinstance(m, dict) and m.get("role") == "system")
-    assert SELF_STATE_SENTENCE in system
-
-
 def test_recall_note_reads_the_switch_and_says_what_a_memory_may_carry(monkeypatch):
     assert note() == NOTE_ON
     monkeypatch.setenv("FINBOT_SW2_MEMORY_PRELOAD", "off")
@@ -114,27 +81,6 @@ def _instruction(monkeypatch, *, existence, wording):
     monkeypatch.setenv("FINBOT_SW1_EXISTENCE_KNOWLEDGE", "on" if existence else "off")
     monkeypatch.setenv("FINBOT_SW2_SELF_STATE_WORDING", "on" if wording else "off")
     return direct.evidence_instruction("\n".join(INSTRUCTION))
-
-
-def test_self_state_sentence_follows_the_existence_sentence_when_that_is_in(monkeypatch):
-    body = _instruction(monkeypatch, existence=True, wording=True)
-    after = body.index(direct.EXISTENCE_INSTRUCTION) + len(direct.EXISTENCE_INSTRUCTION)
-    assert body[after:].startswith(SELF_STATE_SENTENCE)
-
-
-def test_self_state_sentence_follows_the_anchor_when_existence_is_off(monkeypatch):
-    body = _instruction(monkeypatch, existence=False, wording=True)
-    after = body.index(direct.EXISTENCE_ANCHOR) + len(direct.EXISTENCE_ANCHOR)
-    assert body[after:].startswith(SELF_STATE_SENTENCE)
-    assert direct.EXISTENCE_INSTRUCTION not in body
-
-
-def test_wording_off_is_the_same_text_without_the_sentence(monkeypatch):
-    on = _instruction(monkeypatch, existence=True, wording=True)
-    off = _instruction(monkeypatch, existence=True, wording=False)
-    assert SELF_STATE_SENTENCE not in off
-    assert on.replace(SELF_STATE_SENTENCE, "", 1) == off
-    assert len(on) - len(off) == len(SELF_STATE_SENTENCE)
 
 
 @pytest.mark.parametrize("value,memory_tools_present,note_is_new", [("on", True, True), ("off", False, False)])

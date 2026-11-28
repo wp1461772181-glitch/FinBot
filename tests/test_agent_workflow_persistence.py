@@ -22,44 +22,38 @@ def test_workflow_health_reports_migrated_saver_and_key_configuration(disposable
 
 
 
-def test_postgres_reopen_preserves_context_but_never_runtime_key(disposable_database):
-    import asyncio,json
+
+
+def test_postgres_reopen_keeps_the_turn_but_never_the_runtime_key_and_owners_do_not_share_a_thread(disposable_database, monkeypatch):
+    """A kernel turn through the real Postgres checkpointer (6b: the old turn's version of this test went with it): the stored state
+    holds the turn's answer, never the model key that ran it, and another owner's thread for the same conversation id is empty."""
+    import json
     from uuid import uuid4
-    from app.agent_workflow.checkpoints import open_postgres_checkpointer
+    import app.agent_chat_provider as provider
     from app.agent_workflow.settings import checkpoint_database_url
     from app.agent_workflow.graph import build_workflow
-    from app.agent_workflow.state import AgentRuntimeContext,checkpoint_thread_id
-    key='synthetic-provider-key-not-for-state';chat=str(uuid4());thread=checkpoint_thread_id('owner-a',chat)
+    from app.agent_workflow.state import AgentRuntimeContext, checkpoint_thread_id
+    key = 'synthetic-provider-key-not-for-state'
+    chat = str(uuid4())
+    thread = checkpoint_thread_id('owner-a', chat)
+
+    async def answer(provider_name, model, api_key, messages, schemas, **kwargs):
+        assert api_key == key
+        await kwargs["on_text"]("公司销售产品和服务。")
+        return {"usage": {"total_tokens": 5}}, {"role": "assistant", "content": "公司销售产品和服务。"}
+    monkeypatch.setattr(provider, "stream_decision", answer)
+
     async def exercise():
         async with open_postgres_checkpointer(checkpoint_database_url()) as saver:
-            await saver.setup();g=build_workflow(saver)
-            ctx=AgentRuntimeContext('custom','test',key,owner_hash='owner-a',conversation_id=chat,classifier=lambda _:{'category':'B'},answerer=lambda _:'公司销售产品和服务。')
-            value=await g.ainvoke({'question':'运营模式','messages':[]},{'configurable':{'thread_id':thread}},context=ctx)
-            assert value['answer']=='公司销售产品和服务。'
+            await saver.setup()
+            context = AgentRuntimeContext('anthropic', 'test', key, owner_hash='owner-a', conversation_id=chat, engine="v2")
+            value = await build_workflow(saver).ainvoke({'question': '运营模式', 'messages': [{"role": "system", "content": "s"}]},
+                                                        {'configurable': {'thread_id': thread}}, context=context)
+            assert value['answer'] == '公司销售产品和服务。'
         async with open_postgres_checkpointer(checkpoint_database_url()) as saver:
-            restored=(await build_workflow(saver).aget_state({'configurable':{'thread_id':thread}})).values
-            assert restored['previous_category']=='B'
-            assert key not in json.dumps(restored,ensure_ascii=False)
-            other=(await build_workflow(saver).aget_state({'configurable':{'thread_id':checkpoint_thread_id('owner-b',chat)}})).values
+            restored = (await build_workflow(saver).aget_state({'configurable': {'thread_id': thread}})).values
+            assert restored['answer'] == '公司销售产品和服务。'
+            assert key not in json.dumps(restored, ensure_ascii=False, default=str)
+            other = (await build_workflow(saver).aget_state({'configurable': {'thread_id': checkpoint_thread_id('owner-b', chat)}})).values
             assert not other
-    asyncio.run(exercise())
-
-
-def test_invalid_second_classifier_cannot_reuse_old_answer_or_authority(disposable_database):
-    import asyncio
-    from uuid import uuid4
-    from app.agent_workflow.checkpoints import open_postgres_checkpointer
-    from app.agent_workflow.settings import checkpoint_database_url
-    from app.agent_workflow.graph import build_workflow
-    from app.agent_workflow.state import AgentRuntimeContext
-    async def exercise():
-        async with open_postgres_checkpointer(checkpoint_database_url()) as saver:
-            await saver.setup();g=build_workflow(saver);config={'configurable':{'thread_id':str(uuid4())}}
-            first=AgentRuntimeContext('custom','test','dummy',classifier=lambda _:{'category':'B'},answerer=lambda _:'OLD_ANSWER')
-            await g.ainvoke({'question':'旧问题','messages':[]},config,context=first)
-            second=AgentRuntimeContext('custom','test','dummy',classifier=lambda _:{'category':'INVALID','answer':'PRIVATE_RAW_PROVIDER_OUTPUT'})
-            result=await g.ainvoke({'question':'新问题','messages':[]},config,context=second)
-            assert result['terminal_status']=='failed'
-            assert 'OLD_ANSWER' not in result['answer'] and 'PRIVATE_RAW_PROVIDER_OUTPUT' not in str(result)
-            assert result['pending_request'] is None
     asyncio.run(exercise())

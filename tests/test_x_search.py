@@ -491,70 +491,8 @@ def test_kernel_phrase_and_source_type():
 
 # --- the old engine -----------------------------------------------------------------------------------------------------------------
 
-def _old_turn(monkeypatch, decider, executor, tool_scope=None, question="NVDA 在 X 上怎么说"):
-    from app.agent_workflow import consent, direct
-    import app.agent_chat_identity as identity
-    from app.agent_workflow.state import AgentRuntimeContext
-    for module in (consent, direct, tools, identity):
-        monkeypatch.setattr(module, "owner_credential_matches", lambda c: c == OWNER)
-    context = AgentRuntimeContext("custom", "m", "k", owner_hash=OWNER_HASH, identity_credential=OWNER,
-                                  conversation_id=str(uuid.uuid4()), tool_scope=tool_scope, decider=decider, executor=executor,
-                                  intent_recognizer=lambda _p: {"category": "D", "days_back": None, "requested_actions": []})
-
-    async def quiet(_event):
-        pass
-    return asyncio.run(direct.run_direct_turn(question, context, emit=quiet))
-
-
 def _old_call(call_id, name, **args):
     return {"tool_calls": [{"id": call_id, "function": {"name": name, "arguments": json.dumps(args)}}]}
-
-
-def test_old_engine_numbers_a_post_and_keeps_the_marker(monkeypatch, token):
-    seen, executed = [], []
-    steps = iter([_old_call("l1", "load_tools", categories=["新闻与网页"]), _old_call("s1", "search_x", query="$NVDA"),
-                  {"content": "有人在 X 上说 NVDA 的指引上调 [1]"}])
-
-    def decider(_messages, schemas):
-        seen.append([t["function"]["name"] for t in schemas])
-        return next(steps)
-
-    def executor(name, args):
-        executed.append(name)
-        return {"ok": True, "data": _rows(), "source": "x"}
-
-    result = _old_turn(monkeypatch, decider, executor)
-    assert "search_x" not in seen[0] and "search_x" in seen[1] and executed == ["search_x"]
-    assert [c["source_type"] for c in result["citations"]][:1] == ["x_post"]
-    assert "[1]" in result["answer"]
-    assert result["citations"][0]["url"] == "https://x.com/alice/status/111"
-
-
-def test_old_engine_does_not_offer_it_without_a_token(monkeypatch, no_token):
-    seen = []
-    steps = iter([_old_call("l1", "load_tools", categories=["新闻与网页"]), {"content": "好。"}])
-
-    def decider(_messages, schemas):
-        seen.append([t["function"]["name"] for t in schemas])
-        return next(steps)
-
-    _old_turn(monkeypatch, decider, lambda n, a: {"ok": True, "data": []})
-    assert all("search_x" not in names for names in seen) and any("search_configured_news" in names for names in seen)
-
-
-def test_old_engine_refuses_it_outside_the_bots_scope(monkeypatch, token):
-    from app.agent_tool_catalog import ALWAYS_ON
-    seen, executed = [], []
-    steps = iter([_old_call("l1", "load_tools", categories=["新闻与网页"]), _old_call("s1", "search_x", query="$NVDA"), {"content": "不行。"}])
-
-    def decider(_messages, schemas):
-        seen.append([t["function"]["name"] for t in schemas])
-        return next(steps)
-
-    result = _old_turn(monkeypatch, decider, lambda n, a: executed.append(n) or {"ok": True, "data": []},
-                       tool_scope=frozenset({"web_research"}) | ALWAYS_ON)
-    assert all("search_x" not in names for names in seen) and executed == []
-    assert "search_x" in result["audit"].get("out_of_scope_calls", [])
 
 
 def test_a_guest_call_is_refused_by_the_dispatcher(token):

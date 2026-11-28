@@ -15,7 +15,7 @@ from fastapi import HTTPException
 import app.agent_chat_provider as provider
 from app import agent_context as layers
 from app.agent_chat_provider import ResponseCheckFailed, TOOL_CALL_STREAM_GUARD
-from app.agent_workflow import direct, trace
+from app.agent_workflow import trace
 from app.agent_workflow.state import AgentRuntimeContext
 from app.knowledge.runtime import research_context
 from sw1_filings import CUTOFF, aapl_filings
@@ -159,30 +159,6 @@ def test_u3_calls_up_to_the_stream_guard_are_all_accepted_in_order(monkeypatch, 
     assert parsed(message) == expected_calls(items)
 
 
-def test_u4_past_the_stream_guard_is_a_finbot_limit_and_is_not_retried(monkeypatch, audits):
-    items = [('calculate', {'n': i}) for i in range(129)]
-    lines = sse_tool_calls(items, split=True, interleave=True)
-    with pytest.raises(HTTPException) as error:
-        stream_post(monkeypatch, lines)
-    exc = error.value
-    assert exc.status_code == 502 and exc.detail == 'tool_call_batch_too_large'
-    assert exc.check == 'tool_index' and exc.tool_index == 128 and exc.event == event_of_index(lines, 128)
-    # Through the turn: one request, no retry, and the check is recorded.
-    attempts = []
-
-    async def stub(*args, **kwargs):
-        attempts.append(args)
-        raise ResponseCheckFailed('tool_call_batch_too_large', 'tool_index', event=exc.event, tool_index=128)
-    monkeypatch.setattr(direct, 'decision_request', stub)
-    turn = make_turn()
-    with pytest.raises(HTTPException):
-        asyncio.run(turn.model([{'role': 'user', 'content': 'q'}], []))
-    assert len(attempts) == 1
-    assert 'provider_retries' not in turn.audit
-    assert turn.audit['provider_checks'] == [{'code': 'tool_call_batch_too_large', 'check': 'tool_index',
-                                             'event': exc.event, 'tool_index': 128, 'retried': False}]
-
-
 def test_u5_a_mixed_step_keeps_every_call_whole_and_in_index_order(monkeypatch):
     items = [('query_financials', {'symbol': 'AAA', 'latest': True, 'limit': k}) for k in (1, 2, 3)]
     items += [('calculate', {'expression': 'a-b', 'decimals': k, 'inputs': [
@@ -193,16 +169,6 @@ def test_u5_a_mixed_step_keeps_every_call_whole_and_in_index_order(monkeypatch):
 
 
 # ---- U6: the execution cap follows the window --------------------------------------------------------------------
-
-@pytest.mark.parametrize('window,expected', [(0, 32), (200_000, 50), (1_000_000, 128), (32_000, 12), (4_000, 12)])
-def test_u6_the_step_cap_is_the_window_formula_and_thirty_two_by_default(window, expected):
-    turn = make_turn(window=window)
-    running = layers.running_bytes_for_window(window) if window else layers.RUNNING_REQUEST_BYTES
-    assert turn.step_call_cap() == min(128, max(12, running // 2 // 6000))
-    # K10: the window-0 case is 32 only where RUNNING_REQUEST_BYTES is the 128k default (AGENT_MODEL_CONTEXT_WINDOW unset).
-    if window or layers.RUNNING_REQUEST_BYTES == 384_000:
-        assert turn.step_call_cap() == expected
-
 
 # ---- U9–U10: the check codes -------------------------------------------------------------------------------------
 
@@ -270,73 +236,7 @@ def test_u9_on_keeps_the_same_detail_for_every_check_but_the_tool_index_one(monk
     assert error.value.detail == 'provider_incompatible_response'
 
 
-def error_labels(monkeypatch):
-    labels = []
-
-    def record(generation, **kw):
-        if 'error' in kw:
-            labels.append(kw['error'])
-    monkeypatch.setattr(direct.observability, 'end_generation', record)
-    return labels
-
-
-def test_u10_a_failed_check_is_recorded_and_its_retry_is_too_and_the_label_names_the_check(monkeypatch):
-    seen_labels = error_labels(monkeypatch)
-    # One failure, then success on the retry.  decision_request returns (response, message), as provider._post does.
-    responses = [ResponseCheckFailed('provider_incompatible_response', 'post_finish_delta', event=7),
-                 ({'usage': {'total_tokens': 3}}, {'role': 'assistant', 'content': 'ok'})]
-
-    async def stub(*args, **kwargs):
-        item = responses.pop(0)
-        if isinstance(item, Exception):
-            raise item
-        return item
-    monkeypatch.setattr(direct, 'decision_request', stub)
-    turn = make_turn()
-    message = asyncio.run(turn.model([{'role': 'user', 'content': 'q'}], []))
-    assert message['content'] == 'ok'
-    assert turn.audit['provider_retries'] == 1
-    assert turn.audit['provider_checks'] == [{'code': 'provider_incompatible_response', 'check': 'post_finish_delta',
-                                             'event': 7, 'retried': True}]
-    assert seen_labels == []   # the call succeeded: no error label
-
-    # Both attempts fail: two records, and the error label names the check.
-    responses[:] = [ResponseCheckFailed('provider_incompatible_response', 'post_finish_delta', event=7),
-                    ResponseCheckFailed('provider_incompatible_response', 'post_finish_delta', event=7)]
-    turn = make_turn()
-    with pytest.raises(HTTPException):
-        asyncio.run(turn.model([{'role': 'user', 'content': 'q'}], []))
-    assert [c['retried'] for c in turn.audit['provider_checks']] == [True, False]
-    assert seen_labels[-1] == 'provider_incompatible_response:post_finish_delta'
-
-
-def test_u10_with_the_switch_off_there_are_no_records_and_the_error_is_only_the_code(monkeypatch):
-    seen_labels = error_labels(monkeypatch)
-    monkeypatch.setenv(SWITCH, 'off')
-
-    async def stub(*args, **kwargs):
-        raise ResponseCheckFailed('provider_incompatible_response', 'post_finish_delta', event=7)
-    monkeypatch.setattr(direct, 'decision_request', stub)
-    turn = make_turn()
-    with pytest.raises(HTTPException):
-        asyncio.run(turn.model([{'role': 'user', 'content': 'q'}], []))
-    assert 'provider_checks' not in turn.audit and turn.audit.get('provider_retries') == 1
-    assert seen_labels[-1] == 'provider_incompatible_response'
-
-
 # ---- U11–U13: the decider batch, the trace, and off ----------------------------------------------------------------
-
-def run_with_decider(question, scope, steps, seen, *, executor=None, answer='已取得的资料显示 [1]。'):
-    """A turn with a scripted decider. The closing answer is given by an answerer, so no model is ever called."""
-    from test_sw1b_closing_complete import scripted
-
-    async def emit(_):
-        pass
-    ctx = AgentRuntimeContext('custom', 'test', 'dummy', classifier=lambda _: scope, decider=scripted(steps, seen),
-                              answerer=lambda messages: answer, executor=executor)
-    with research_context('sw1d-unit-test', cutoff=CUTOFF):
-        return asyncio.run(direct.run_direct_turn(question, ctx, emit=emit))
-
 
 def fixture_executor(rows_by_symbol, *, distinct=False):
     """query_financials from fixture rows. distinct: each read's rows carry their own id and source_url, so that reads of one
@@ -359,45 +259,9 @@ def batch(count, name='calculate'):
          ensure_ascii=False)}} for i in range(count)]}
 
 
-def test_u11_a_batch_past_the_guard_with_evidence_closes_on_the_evidence_with_the_note(audits):
-    from sw1_filings import new_symbol
-    from test_sw1b_closing_complete import call, text
-    symbol = new_symbol()
-    rows = {symbol: rows_of(symbol, aapl_filings())}
-    scope = {'category': 'A', 'mode': 'financials', 'symbol': symbol, 'symbols': [symbol], 'days_back': None}
-    seen = []
-    steps = [call('query_financials', symbol=symbol, latest=True, limit=4), batch(129)]
-    result = run_with_decider(f'{symbol} 营收', scope, steps, seen, executor=fixture_executor(rows))
-    assert result['status'] == 'succeeded'
-    assert result['answer'].endswith('（模型这一步一次发出的工具调用超过了系统单次能接收的上限，本轮基于已取得的资料作答。）')
-    turn = audits[-1]
-    assert not any(m.get('role') == 'assistant' and len(m.get('tool_calls') or []) == 129 for m in turn.protocol)
-    assert turn.audit.get('provider_failure') is None  # the decider path sets the stop, not a provider failure
-
-
-def test_u11_a_batch_past_the_guard_with_no_evidence_fails_with_the_note(audits):
-    from sw1_filings import new_symbol
-    symbol = new_symbol()
-    scope = {'category': 'A', 'mode': 'financials', 'symbol': None, 'symbols': [], 'days_back': None}
-    seen = []
-    result = run_with_decider('一个问题', scope, [batch(129)], seen)
-    assert result['status'] == 'failed'
-    assert result['answer'].startswith('模型这一步一次发出的工具调用超过了系统单次能接收的上限，已停止。')
-
-
 def test_u12_a_deferred_call_shows_as_a_warning_and_other_failures_stay_failed():
     assert trace.tool_output({'ok': False, 'error_code': 'step_call_cap'})[0] == 'warn'
     assert trace.tool_output({'ok': False, 'error_code': 'x'})[0] == 'failed'
-
-
-def test_u13_with_the_switch_off_a_thirteen_call_step_is_still_protocol_invalid(audits, monkeypatch):
-    monkeypatch.setenv(SWITCH, 'off')
-    scope = {'category': 'A', 'mode': 'financials', 'symbol': None, 'symbols': [], 'days_back': None}
-    seen = []
-    result = run_with_decider('一个问题', scope, [batch(13)], seen)
-    assert result['reason'] == 'provider_protocol_invalid'
-    audit = audits[-1].audit
-    assert not any(k in audit for k in ('max_step_calls', 'step_call_cap', 'step_calls_deferred', 'step_call_deferrals', 'provider_checks'))
 
 
 # ---- R3: the basis of the cap, measured ---------------------------------------------------------------------------
@@ -412,46 +276,6 @@ def padded_rows(symbol, filings, size):
 
 
 DIGEST_HEAD = '以下是本轮已读、因篇幅不在上面 DATA 里的数'
-
-
-def measure_full_batch(audits, monkeypatch, count, *, cap=None):
-    """One step of ``count`` full-size reads (about 64 KB each), then a closing text. Returns the numbers R3 reports: the
-    request the model is sent at the second decision (the protocol and the evidence block as tool_messages builds them),
-    and the protocol alone against the protocol half-guard."""
-    from app.agent_tool_catalog import schemas
-    from sw1_filings import new_symbol
-    if cap is not None:
-        monkeypatch.setattr(direct.Turn, 'step_call_cap', lambda self: cap)
-    symbol = new_symbol()
-    rows = {symbol: padded_rows(symbol, aapl_filings(), 64_000)}
-    scope = {'category': 'A', 'mode': 'financials', 'symbol': symbol, 'symbols': [symbol], 'days_back': None}
-    seen = []
-    steps = [batch_of_reads(symbol, count), {'content': '完成。'}]
-    run_with_decider(f'{symbol} 营收', scope, steps, seen, executor=fixture_executor(rows, distinct=True))
-    turn = audits[-1]
-    messages = seen[1]
-    evidence = next(m['content'] for m in messages if isinstance(m, dict) and str(m.get('content') or '').startswith('Accepted evidence DATA'))
-    digest = any(isinstance(m, dict) and DIGEST_HEAD in str(m.get('content') or '') for m in messages)
-    request = len(json.dumps(messages, ensure_ascii=False).encode()) + len(json.dumps(schemas(owner=True)).encode())
-    protocol = len(json.dumps(turn.protocol, ensure_ascii=False).encode())
-    half = turn._running_bytes() // 2
-    return {'count': count, 'evidence_chars': len(evidence), 'digest': digest, 'request_bytes': request,
-            'running': turn._running_bytes(), 'protocol_bytes': protocol, 'half': half,
-            'ratio': round(protocol / half, 3), 'executed': turn.audit.get('tool_calls')}
-
-
-def test_r3_thirty_two_full_results_fill_the_evidence_and_the_request_stays_under_the_guard(audits, monkeypatch):
-    numbers = measure_full_batch(audits, monkeypatch, 32)
-    print('R3', numbers)
-    assert numbers['executed'] == 32
-    assert numbers['evidence_chars'] > 20_000 and numbers['digest']        # evidence filled to its budget, with the SW1C ledger
-    assert numbers['request_bytes'] < numbers['running']
-
-
-def test_r3_report_only_thirty_three_full_results(audits, monkeypatch):
-    # Report only (spec §7.3): the same step with the cap lifted to 33, to show how much room the guard leaves.
-    numbers = measure_full_batch(audits, monkeypatch, 33, cap=33)
-    print('R3-33', numbers)
 
 
 def batch_of_reads(symbol, count):

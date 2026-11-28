@@ -47,7 +47,8 @@ def main() -> int:
 def run() -> int:
     from app.agent_chat_models import AgentTask, AgentResearchQueue, AgentConversation
     from app.agent_chat_store import owner_hash
-    from app.agent_workflow import consent, direct, tools
+    from app.agent_workflow import consent, tools
+    from app.kernel import act as kernel_act, loop as kernel_loop, prompt as kernel_prompt
     from app.agent_workflow.models import AgentConsent
     from app.database import Base, SessionLocal, engine
     import app.agent_chat_identity as identity
@@ -61,7 +62,7 @@ def run() -> int:
                                               and t.name not in skipped])
 
     owner_cred = "live-tg-owner-" + uuid.uuid4().hex
-    for module in (consent, direct, tools, identity, tg):
+    for module in (consent, tools, kernel_act, kernel_loop, kernel_prompt, identity, tg):
         module.owner_credential_matches = lambda c, o=owner_cred: c == o
     owner = owner_hash(owner_cred)
     failures: list[str] = []

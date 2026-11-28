@@ -39,8 +39,8 @@ def world(monkeypatch):
         db.query(AgentConsent).delete()
         db.commit()
     import app.agent_chat_identity as identity
-    from app.agent_workflow import direct, tools
-    for module in (consent, direct, tools, identity, act):
+    from app.agent_workflow import tools
+    for module in (consent, tools, identity, act):
         monkeypatch.setattr(module, "owner_credential_matches", lambda c: c == CREDENTIAL, raising=False)
     monkeypatch.delenv("FINBOT_KERNEL_MEMORY_WRITES", raising=False)
 

@@ -47,37 +47,6 @@ def test_cancellation_during_one_effect_stops_later_items_and_preserves_complete
     assert all(item['error_code']=='batch_stopped' for item in result['data'][1:])
     assert consent.execute(owner,'cancel-running',token,ops,handler)==result
 
-def test_cancelled_agent_await_requests_batch_stop_without_repeating_started_effect(owner,monkeypatch):
-    import threading
-    from app.agent_workflow import direct
-    from app.agent_workflow.state import AgentRuntimeContext
-    monkeypatch.setattr(direct,'owner_credential_matches',lambda c:c=='owner')
-    ops=[{'name':'index','arguments':{'max_tasks':n}} for n in (1,2)]
-    card=consent.propose(owner,'cancel-await',ops,{})
-    started=threading.Event();release=threading.Event();completed=threading.Event();calls=[]
-    def effect(self,op,key):
-        calls.append(key);started.set();release.wait(2)
-        return {'ok':True}
-    monkeypatch.setattr(direct.Turn,'execute_approved_operation',effect)
-    original=consent.execute
-    def execute(*args,**kwargs):
-        try:return original(*args,**kwargs)
-        finally:completed.set()
-    monkeypatch.setattr(consent,'execute',execute)
-    ctx=AgentRuntimeContext('custom','test','dummy',identity_credential='owner',conversation_id='cancel-await')
-    async def emit(_):pass
-    async def scenario():
-        task=asyncio.create_task(direct.run_direct_turn(card['choices'][0]['value'],ctx,emit=emit,state={'pending_request':card,'requested_pending_id':card['id']}))
-        assert await asyncio.to_thread(started.wait,2)
-        task.cancel()
-        try:
-            with pytest.raises(asyncio.CancelledError):await task
-            assert consent.lookup(owner,'cancel-await',card['id'])['status']=='cancelling'
-        finally:release.set()
-        assert await asyncio.to_thread(completed.wait,2)
-    asyncio.run(scenario())
-    assert len(calls)==1
-
 def test_cancel_committed_before_next_durable_claim_stops_that_item(owner,monkeypatch):
     from sqlalchemy.orm import Session
     ops=[{'name':'index','arguments':{'max_tasks':n}} for n in (1,2,3)]
@@ -151,7 +120,7 @@ def test_explicit_saved_historical_filing_does_not_depend_on_recent_official_lis
 
 
 def test_registration_occurs_only_inside_confirmed_execution_and_is_idempotent(owner,monkeypatch):
-    from app.agent_workflow import tools,actions
+    from app.agent_workflow import tools, actions
     from app.agent_workflow.state import AgentRuntimeContext
     from app.models import SecFilingInventory
     from sqlalchemy import select
@@ -174,25 +143,3 @@ def test_registration_occurs_only_inside_confirmed_execution_and_is_idempotent(o
     assert calls==[1]
 
 
-def test_suggested_sec_discovery_waits_for_initial_approval_and_returns_frozen_second_card(owner,monkeypatch):
-    from app.agent_workflow import direct,sec_sources,tools
-    from app.agent_workflow.state import AgentRuntimeContext
-    for module in (direct,tools):monkeypatch.setattr(module,'owner_credential_matches',lambda c:c=='owner')
-    calls=[]
-    def discover(name,args,**_):
-        calls.append('metadata')
-        return {'name':name,'arguments':{**args,'accession_number':'0000050863-26-000001'},'discovery':{'filed_at':'2026-08-01','form':'10-Q','source_url':'https://www.sec.gov/Archives/example.htm'}}
-    monkeypatch.setattr(sec_sources,'prepare_filing',discover)
-    monkeypatch.setattr(tools,'execute_costly',lambda *_:pytest.fail('no download before second confirmation'))
-    async def emit(_):pass
-    ctx=AgentRuntimeContext('custom','test','dummy',identity_credential='owner',conversation_id='two-stage',classifier=lambda _:'D',
-        decider=lambda *_:{'tool_calls':[{'id':'suggest','function':{'name':'request_action','arguments':'{"tool":"fetch_sec","arguments":{"symbol":"INTC"},"reason":"缺少原文"}'}}]})
-    initial=asyncio.run(direct.run_direct_turn('INTC 的资料还缺什么？',ctx,emit=emit))
-    assert calls==[] and initial['pending_request']['display']['agent_suggestion']
-    first_card=initial['pending_request']
-    state={'pending_request':first_card,'requested_pending_id':first_card['id']}
-    first=asyncio.run(direct.run_direct_turn(first_card['choices'][0]['value'],ctx,emit=emit,state=state))
-    again=asyncio.run(direct.run_direct_turn(first_card['choices'][0]['value'],ctx,emit=emit,state=state))
-    assert calls==['metadata'] and first['pending_request']['id']==again['pending_request']['id']
-    saved=consent.lookup('owner','two-stage',first['pending_request']['id'])
-    assert saved['operations'][0]['arguments']['accession_number']=='0000050863-26-000001'

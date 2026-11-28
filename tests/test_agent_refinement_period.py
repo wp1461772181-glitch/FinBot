@@ -10,7 +10,6 @@ import asyncio
 
 import pytest
 
-from app.agent_workflow import direct
 from app.agent_workflow.evidence import gate_row
 from app.agent_workflow.state import AgentRuntimeContext
 
@@ -24,35 +23,6 @@ HISTORY = [{'role': 'user', 'content': '去年微软的营收是多少？'},
 
 async def emit(_):
     pass
-
-
-def run_refinement(question, canonical, period):
-    ctx = AgentRuntimeContext(
-        'custom', 'test', 'dummy',
-        resolver=lambda _: {'relationship': 'refinement', 'canonical_question': canonical},
-        classifier=lambda _: {'category': 'A', 'company': 'Microsoft Corporation', 'symbol': 'MSFT',
-                              'company_mention': '微软', 'metrics': ['营收'], 'financial_only': True, 'period': period},
-        decider=lambda *_: {'content': '没有可核验资料。'},
-        executor=lambda name, args: {'ok': True, 'data': []})
-    return asyncio.run(direct.run_direct_turn(question, ctx, emit=emit, messages=list(HISTORY),
-                                              state={'previous_scope': dict(PREVIOUS)}))
-
-
-def test_a_refinement_that_names_another_fiscal_year_keeps_it():
-    result = run_refinement('那前年呢？', f'微软（MSFT）{FY2024}的营收是多少？', FY2024)
-    audit = result['audit']
-    assert result['previous_scope']['period'] == FY2024
-    assert 'period' not in audit.get('refinement_scope_restored', [])
-    assert audit['refinement_period_changed'] == [FY2025, FY2024]
-    # The rest of the task is still preserved.
-    assert audit['preserved_task_scope'] is True and result['previous_scope']['metrics'] == ['营收']
-
-
-def test_a_refinement_that_names_no_period_still_inherits_the_previous_one():
-    result = run_refinement('再核对一遍', '微软（MSFT）的营收', None)
-    assert result['previous_scope']['period'] == FY2025
-    assert 'period' in result['audit']['refinement_scope_restored']
-    assert 'refinement_period_changed' not in result['audit']
 
 
 def xbrl_row(label, value):

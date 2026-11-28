@@ -240,8 +240,8 @@ def _reasoning_effort(value) -> str | None:
 
 
 def _engine(value) -> str | None:
-    """A bot's turn engine: None (the server's default, ``FINBOT_KERNEL_DEFAULT``: the kernel unless it says "v1"), "v2" (the kernel)
-    or "v1" (the old turn, kept until the old turn is removed).  Anything else is refused."""
+    """A bot's stored turn engine: None, "v1" or "v2".  Not read since stage 6b (every turn runs the kernel); the column and the field stay
+    so that an older client that sends it is not refused.  Anything else is refused."""
     if value is None:
         return None
     if value not in ("v1", "v2"):

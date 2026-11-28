@@ -20,7 +20,8 @@ from .. import agent_tasks, alert_feedback, answer_feedback, owner_views, portfo
 from ..agent_chat_identity import owner_credential_matches
 from .. import agent_model_catalog as model_catalog
 from ..agent_tool_catalog import definitions, validate
-from ..agent_workflow import consent, direct, directory_ops, sec_sources, tools, web_sources, workspace_tools
+from ..agent_workflow import consent, directory_ops, sec_sources, tools, web_sources, workspace_tools
+from ..agent_workflow import write_text as texts
 from ..agent_workflow.fp_flags import flag
 from . import ask
 from . import inbox as inboxes
@@ -242,8 +243,8 @@ async def _targets(name: str, args: dict) -> list[dict]:
     if args.get("url"):
         row["url"] = args["url"]
     if name in {"analyze", "import", "index", "review_filing"} and args.get("source_id"):
-        row["title"] = await asyncio.to_thread(direct.source_display_title, kind, args["source_id"]) or "所选来源"
-        row["source_type"] = direct.SOURCE_KIND_TITLES.get(kind, kind)
+        row["title"] = await asyncio.to_thread(texts.source_display_title, kind, args["source_id"]) or "所选来源"
+        row["source_type"] = texts.SOURCE_KIND_TITLES.get(kind, kind)
     if name == "review_filing" and args.get("decision"):
         row["decision"] = {"accepted": "标记为相关", "rejected": "标记为不相关"}.get(str(args["decision"]), str(args["decision"]))
     if name == "save_material_evidence" and args.get("title"):
@@ -267,7 +268,7 @@ def _record_row(name: str, args: dict) -> dict:
     if name == "review_knowledge_candidate":
         return {"title": f'知识候选 {args["candidate_id"][:8]}', "decision": "通过" if args["approved"] else "拒绝"}
     if name == "import_sources":
-        kind = direct.SOURCE_KIND_TITLES.get(args["source_type"], args["source_type"])
+        kind = texts.SOURCE_KIND_TITLES.get(args["source_type"], args["source_type"])
         return {"title": f'{len(args["source_ids"])} 份{kind}', "source_type": kind}
     return {}
 
@@ -334,7 +335,7 @@ async def _remember_write(run, args: dict, operation: dict, quote: str, *, notic
     if noticed:
         return {"title": NOTICED_TITLE, "targets": [{"title": args["text"], "quote": quote, "scope": layer}],
                 "alternative": f"范围：{layer}。这是从他的话里看出来的推测，未经他确认，只影响回答的详略和先后，不是证据；他可以在记忆页确认或点「不对」。"}
-    return {"title": direct.WRITE_TITLES["remember"], "targets": [{"title": args["text"], "quote": quote, "scope": layer}],
+    return {"title": texts.WRITE_TITLES["remember"], "targets": [{"title": args["text"], "quote": quote, "scope": layer}],
             "alternative": f"范围：{layer}（记忆页可改）。可以撤回：之后说「忘掉……」或在记忆页删除。它只影响回答的格式和侧重，不是证据，也不授权任何操作。"}
 
 
@@ -348,7 +349,7 @@ async def _forget(run, args: dict) -> dict:
         alternative = "这是我的推测；删掉后不再保留原文，以后也不会再这样推测。"
     else:
         alternative = "忘掉后这条不再用于回答；记忆页里仍能看到它的归档记录。"
-    return {"title": direct.WRITE_TITLES["forget"], "targets": [{"title": item["text"]}], "alternative": alternative}
+    return {"title": texts.WRITE_TITLES["forget"], "targets": [{"title": item["text"]}], "alternative": alternative}
 
 
 VIEW_OPERATIONS = ("record_view", "drop_view")
@@ -664,15 +665,15 @@ async def _revision(run, args: dict) -> Prepared | dict:
     plan = await asyncio.to_thread(workspace_tools.revision_plan, args["symbol"], args.get("version_id"), context, args.get("mentioned_sources") or [])
     if plan["status"] != "ready":
         # The notice is the whole story: why there is nothing to revise and what to do instead.
-        return {"ok": False, "data": [], "error_code": plan["status"], "reason": direct.revision_notice(plan),
+        return {"ok": False, "data": [], "error_code": plan["status"], "reason": texts.revision_notice(plan),
                 "hint": "reason 是写给用户看的原因，如实转告用户；不要再提出这项修订。"}
-    shown = plan["candidates"][:direct.REVISION_CARD_LIMIT]
+    shown = plan["candidates"][:texts.REVISION_CARD_LIMIT]
     operation = {"name": "revise_forecast", "arguments": {"symbol": plan["symbol"], "version_id": plan["version_id"]},
                  "revision": {k: plan[k] for k in ("version_no", "decision_at", "window_start", "window_end")},
                  "candidates": [{k: c[k] for k in ("source_type", "source_id", "title", "kind", "published_at", "category")} for c in shown]}
     decided = plan["decision_at"][:10]
     more = f'共 {len(plan["candidates"])} 份，这里列出最新的 {len(shown)} 份。' if len(plan["candidates"]) > len(shown) else ""
-    named = "".join(f'\n你提到的{direct.material_words(m)}不在列表里：{m["reason_text"]}。' for m in plan.get("mentioned") or [] if not m.get("category"))
+    named = "".join(f'\n你提到的{texts.material_words(m)}不在列表里：{m["reason_text"]}。' for m in plan.get("mentioned") or [] if not m.get("category"))
     display = {"title": f'修正 {plan["symbol"]} 的预测（v{plan["version_no"]}，{decided} 作出）',
                "targets": [{"symbol": plan["symbol"], "decision_date": decided}],
                "alternative": (f'可选材料：预测后 7 天内（至 {plan["window_end"][:10]}）发布的新材料，或预测前 30 天内（{plan["window_start"][:10]} 起）发布、预测后才收录的材料。'
@@ -721,7 +722,7 @@ async def prepare(run, name: str, arguments) -> Prepared | dict:
     if name == "revise_forecast":
         return await _revision(run, args)
     operation = {"name": name, "arguments": copy.deepcopy(args)}
-    title = direct.WRITE_TITLES.get(name, name)
+    title = texts.WRITE_TITLES.get(name, name)
 
     if name == "remember":
         display = await _remember(run, args, operation)
@@ -777,16 +778,16 @@ async def prepare(run, name: str, arguments) -> Prepared | dict:
         elif name == "create_routine":
             operation["bot_id"] = getattr(context, "bot_id", None)
             try:
-                preview = await asyncio.to_thread(agent_tasks.preview_task, context.owner_hash, direct.routine_fields(args))
+                preview = await asyncio.to_thread(agent_tasks.preview_task, context.owner_hash, texts.routine_fields(args))
             except agent_tasks.TaskError as failure:
                 return _task_refusal(failure)
-            skills = await asyncio.to_thread(direct.skill_names, context.owner_hash)
+            skills = await asyncio.to_thread(texts.skill_names, context.owner_hash)
             display.update(title=f'{title} · {args["name"]}',
-                           targets=[{"kind": direct.routine_when(preview), **({"symbol": "、".join(args["symbols"])} if args["symbols"] else {})}],
-                           alternative=direct.routine_created(preview, skills))
+                           targets=[{"kind": texts.routine_when(preview), **({"symbol": "、".join(args["symbols"])} if args["symbols"] else {})}],
+                           alternative=texts.routine_created(preview, skills))
         elif name == "save_skill":
             display.update(title=f'{title} · {args["name"]}', targets=[{"kind": args["description"]}],
-                           alternative=f'步骤：{args["body"][:300]}　允许的工具：{"、".join(args["allowed_tools"])}。技能不授权写操作；工具清单只对旧流程的 bot 生效。')
+                           alternative=f'步骤：{args["body"][:300]}　允许的工具：{"、".join(args["allowed_tools"])}。技能不授权写操作；工具清单只作说明，不限制它能用的工具。')
         elif name == "ingest_web_source":
             early = await _ingest(run, args, operation, display)
             if early is not None:
@@ -798,16 +799,16 @@ async def prepare(run, name: str, arguments) -> Prepared | dict:
             changed = skills = None
             if name == "update_routine":       # the route's own checks, before a card exists
                 try:
-                    changed = await asyncio.to_thread(agent_tasks.preview_task, context.owner_hash, direct.routine_fields(args), args["routine_id"])
+                    changed = await asyncio.to_thread(agent_tasks.preview_task, context.owner_hash, texts.routine_fields(args), args["routine_id"])
                 except agent_tasks.TaskError as failure:
                     return _task_refusal(failure)
                 if changed is None:
                     return _failure("routine_not_found")
-                skills = await asyncio.to_thread(direct.skill_names, context.owner_hash)
+                skills = await asyncio.to_thread(texts.skill_names, context.owner_hash)
             if name == "update_routine":
                 operation["expect"] = await asyncio.to_thread(directory_ops.snapshot, context.owner_hash, name, args)
-            display.update(title=f'{title} · {task["name"]}', targets=[{"kind": direct.routine_when(task)}],
-                           alternative=direct.routine_changes(args, task, changed, skills) if name == "update_routine" else "删除后不再运行；已生成的简报会保留。")
+            display.update(title=f'{title} · {task["name"]}', targets=[{"kind": texts.routine_when(task)}],
+                           alternative=texts.routine_changes(args, task, changed, skills) if name == "update_routine" else "删除后不再运行；已生成的简报会保留。")
         elif name == "analyze" and args.get("catalog_model"):
             try:
                 await asyncio.to_thread(_usable_model, args["catalog_model"])
@@ -918,7 +919,7 @@ async def _run_at_once(run, prepared: Prepared) -> tuple[dict, str]:
     title = prepared.display["title"]
     ok = bool(value.get("ok", True)) if isinstance(value, dict) else False
     try:
-        facts = direct.execution_facts(value, [operation])[0]
+        facts = texts.execution_facts(value, [operation])[0]
     except Exception:
         logger.exception("kernel act facts failed operation=%s", operation.get("name"))
         facts = {}
@@ -931,10 +932,10 @@ async def _run_at_once(run, prepared: Prepared) -> tuple[dict, str]:
         undo = NOTICED_NOTE
     recorded = {"recorded": operation["arguments"]["text"]} if operation["name"] == "record_view" else {}
     if operation["name"] == "rate_alert":      # the line the tool wrote names the message it matched
-        row = next(iter(direct.execution_rows(value)), {})
+        row = next(iter(texts.execution_rows(value)), {})
         recorded = {k: row[k] for k in ("recorded", "target", "target_id", "note") if row.get(k) is not None}      # note: the ack did not go through
     if operation["name"] == "rate_answer":     # the line the tool wrote names the answer it matched
-        row = next(iter(direct.execution_rows(value)), {})
+        row = next(iter(texts.execution_rows(value)), {})
         recorded = {k: row[k] for k in ("recorded", "message_id") if row.get(k) is not None}
     return {"ok": True, "data": [{**facts, **recorded, "status": "done", "title": title, "undo": undo}]}, "done"
 
