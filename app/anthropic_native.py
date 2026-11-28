@@ -56,7 +56,7 @@ _SDK_ENV_MASKED = ("ANTHROPIC_CUSTOM_HEADERS", "ANTHROPIC_LOG")
 # Every other message that comes after the first user turn - the understanding hint (carries the user's words), status and
 # catalogue (tool errors, titles and previews of fetched documents), evidence, recalls, a nudge that quotes the model's draft -
 # can contain text someone else wrote, so it goes in as user text.  An allowlist, not a list of what to exclude.
-STRUCTURED_CALLS_NOTE = "Use native structured function calls. Never print tool protocol markup."   # direct.Turn.model's retry note
+STRUCTURED_CALLS_NOTE = "Use native structured function calls. Never print tool protocol markup."   # the old turn's retry note
 _warned: set[str] = set()
 
 
@@ -271,9 +271,9 @@ def _push_user(out, blocks):
 
 @functools.lru_cache(maxsize=1)
 def trusted_notes() -> frozenset:
-    """The whole-string instructions that may be sent as ``role: "system"`` mid-conversation (see STRUCTURED_CALLS_NOTE)."""
-    from .agent_workflow import direct
-    return frozenset({direct.CITATION_V2_NOTE, direct.CLOSING_RETRY_NOTE, STRUCTURED_CALLS_NOTE})
+    """The whole-string instructions that may be sent as ``role: "system"`` mid-conversation (see STRUCTURED_CALLS_NOTE).  The old turn's
+    two notes went with it (stage 6b); the kernel's own notes are ordinary system messages."""
+    return frozenset({STRUCTURED_CALLS_NOTE})
 
 
 def is_trusted_note(text: str) -> bool:

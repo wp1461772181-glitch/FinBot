@@ -14,7 +14,8 @@ import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from ..agent_workflow import consent, direct
+from ..agent_workflow import consent
+from ..agent_workflow import write_text as texts
 from ..agent_workflow.fp_flags import flag
 from . import act
 
@@ -248,7 +249,7 @@ async def settle(run, press: Press, state: dict) -> Settled:
     picks = None
     if revision:
         try:
-            picks = direct.ticked_positions(press.ticked or "", pending)
+            picks = texts.ticked_positions(press.ticked or "", pending)
         except ValueError:
             return Settled(NOTHING_TICKED, None, "waiting_for_input", "refused:nothing_ticked")
         if len(operations) != 1 or max(picks) > len(operations[0]["candidates"]):
@@ -272,8 +273,8 @@ async def settle(run, press: Press, state: dict) -> Settled:
         logger.exception("kernel pressed card failed while executing request=%s", press.request_id)
         return Settled(UNKNOWN_RESULT, None, "succeeded", "failed:unknown_result")
     try:
-        facts = direct.execution_facts(value, operations)
-        note = direct.library_note(value) if value.get("ok", True) else ""
+        facts = texts.execution_facts(value, operations)
+        note = texts.library_note(value) if value.get("ok", True) else ""
     except Exception:
         logger.exception("kernel pressed card facts failed request=%s", press.request_id)
         facts, note = [{"status": "complete", "ok": bool(value.get("ok", True))}], ""

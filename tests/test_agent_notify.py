@@ -50,9 +50,9 @@ def owner(monkeypatch, disposable_database):
         for model in (AgentTelegramMessage, AgentTelegramBind, AgentInboxItem, AgentTask, AgentBot):
             db.query(model).delete()
         db.commit()
-    from app.agent_workflow import consent, direct, tools
+    from app.agent_workflow import consent, tools
     import app.agent_chat_identity as identity
-    for module in (consent, direct, tools, identity):
+    for module in (consent, tools, identity):
         monkeypatch.setattr(module, "owner_credential_matches", lambda c: c == OWNER)
     return OWNER
 
@@ -77,7 +77,7 @@ def _outbox():
 
 
 def _turn(bot_id, *, unattended=True, decider=None, executor=None, recognizer=None):
-    from app.agent_workflow import direct
+    pass  # (removed import of the old turn)
     from app.agent_workflow.state import AgentRuntimeContext
     settings = bots.turn_settings(OWNER_HASH, bot_id)
     context = AgentRuntimeContext("custom", "m", "k", owner_hash=OWNER_HASH, identity_credential=OWNER,
@@ -92,57 +92,6 @@ def _turn(bot_id, *, unattended=True, decider=None, executor=None, recognizer=No
 
 
 # --- the tool ------------------------------------------------------------------------------------------
-
-def test_the_tool_has_no_recipient_and_is_offered_to_every_bot_without_a_card(owner):
-    policy = definitions()["notify_telegram"]
-    assert policy.level == "notify" and not policy.confirmation and not policy.guest
-    assert set(policy.args_schema.model_json_schema()["properties"]) == {"text", "evidence_ids"}
-    for extra in ({"chat_id": 1}, {"to": "@someone"}, {"recipient": "x"}):
-        with pytest.raises(Exception):
-            validate("notify_telegram", {"text": "有新消息", **extra})
-    # A narrow tool scope keeps it (whether to notify is the instruction's call; the daily cap is the switch).
-    news = _news()
-    assert "notify_telegram" in bots.turn_settings(OWNER_HASH, news["id"])["tool_scope"]
-    direct, context, quiet = _turn(news["id"])
-    turn = direct.Turn("q", context, quiet, [], {})
-    names = {t["function"]["name"] for t in turn.permitted_tools()}
-    assert "notify_telegram" in names and "fetch_sec" not in names  # unattended: still no write tool
-
-
-def test_a_news_bot_message_carries_its_name_as_plain_chat_and_goes_to_the_bound_chat(owner):
-    _bind()
-    news = _news()
-    direct, context, quiet = _turn(news["id"])
-    turn = direct.Turn("q", context, quiet, [], {})
-    turn.citations = [dict(c) for c in NEWS]
-    outcome = asyncio.run(turn.notify({"text": "高重要度：英伟达发布新芯片，订单超过 100 亿美元 [1]。", "evidence_ids": [1]}))
-    assert outcome["ok"] and outcome["data"][0]["status"] == "queued_for_telegram"
-    assert turn.audit["telegram"] == "queued"
-    [row] = _outbox()
-    assert row.text == "【抓新闻】\n高重要度：英伟达发布新芯片，订单超过 100 亿美元。"
-    assert "Reuters" not in row.text and "来源" not in row.text
-    assert row.source == "notify" and str(row.bot_id) == news["id"] and row.status == "pending"
-
-    # The bridge sends it to the bound chat (the only recipient there is) and keeps the Telegram id.
-    sent = []
-
-    async def send_text(client, bot_token, chat_id, text, inline_keyboard=None, *, markdown=True):
-        sent.append((chat_id, text, markdown))
-        return 777
-    import types
-    patched = types.SimpleNamespace(**{k: getattr(tg, k) for k in ("pending_messages", "mark_sent", "mark_failed")})
-    original = bridge._send_text
-    bridge._send_text = send_text
-    bridge_token = bridge._bot_token_for_send
-    bridge._bot_token_for_send = lambda owner, module: TOKEN
-    try:
-        asyncio.run(bridge._deliver_outbox(None, OWNER_HASH, CHAT, patched))
-    finally:
-        bridge._send_text, bridge._bot_token_for_send = original, bridge_token
-    assert sent == [(CHAT, row.text, False)]
-    [after] = _outbox()
-    assert after.status == "sent" and after.telegram_message_id == 777
-
 
 def test_figures_need_this_turns_evidence_and_a_bound_chat(owner):
     news = _news()
@@ -167,54 +116,6 @@ def test_figures_need_this_turns_evidence_and_a_bound_chat(owner):
         stranger_id = stranger.id
     with pytest.raises(tg.NotifyError, match="unknown_bot"):
         tg.notify(OWNER_HASH, stranger_id, "有新消息", [], [])
-
-
-def test_past_the_daily_cap_nothing_more_is_sent(owner):
-    _bind()
-    news = _news(daily_notify_cap=2)
-    other = bots.create_bot(OWNER_HASH, {"name": "苹果"})
-    for _ in range(2):
-        tg.notify(OWNER_HASH, news["id"], "有新消息。", [], [], now=NOW)
-    with pytest.raises(tg.NotifyError, match="notify_daily_cap"):
-        tg.notify(OWNER_HASH, news["id"], "第三条。", [], [], now=NOW)
-    assert len(_outbox()) == 2
-    # Another bot has its own cap; answers the bridge sent do not count; the next local day starts again.
-    assert tg.notify(OWNER_HASH, other["id"], "苹果有新消息。", [], [], now=NOW)["remaining_today"] == 4
-    tg.record_reply(OWNER_HASH, news["id"], "【抓新闻】回答", 900)
-    assert tg.notify(OWNER_HASH, news["id"], "新的一天。", [], [], now=NOW + timedelta(days=1))["remaining_today"] == 1
-    # A cap of 0 means the bot never notifies; the tool says so and the turn goes on.
-    bots.update_bot(OWNER_HASH, other["id"], {"daily_notify_cap": 0})
-    direct, context, quiet = _turn(other["id"])
-    turn = direct.Turn("q", context, quiet, [], {})
-    refused = asyncio.run(turn.notify({"text": "不会发出去。", "evidence_ids": []}))
-    assert refused["ok"] is False and refused["error_code"] == "notify_daily_cap"
-
-
-def test_an_unattended_turn_calls_the_tool_without_a_card(owner):
-    """The real tool loop: a scheduled news-bot run calls notify_telegram; no consent row, no card, queued."""
-    from app.agent_workflow.models import AgentConsent
-    _bind()
-    news = _news()
-    seen_tools = []
-    steps = iter([
-        {"tool_calls": [{"id": "n1", "function": {"name": "notify_telegram", "arguments": json.dumps(
-            {"text": "高重要度新闻，详情见对话。", "evidence_ids": []}, ensure_ascii=False)}}]},
-        {"content": "已通知所有者。"},
-    ])
-
-    def decider(messages, tools):
-        seen_tools.append({t["function"]["name"] for t in tools})
-        return next(steps)
-    direct, context, quiet = _turn(news["id"], decider=decider,
-                                   recognizer=lambda _p: {"category": "D", "days_back": None, "requested_actions": []})
-    with SessionLocal() as db:
-        consents_before = db.query(AgentConsent).count()
-    result = asyncio.run(direct.run_direct_turn("看看今天的新闻，重要的就通知我。", context, emit=quiet))
-    assert "notify_telegram" in seen_tools[0]
-    assert result.get("pending_request") is None
-    assert [r.text for r in _outbox()] == ["【抓新闻】\n高重要度新闻，详情见对话。"]
-    with SessionLocal() as db:
-        assert db.query(AgentConsent).count() == consents_before  # no card was minted
 
 
 # --- alerts and brief tasks ----------------------------------------------------------------------------

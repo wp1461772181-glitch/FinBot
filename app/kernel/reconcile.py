@@ -171,7 +171,7 @@ def inputs_of(db, row) -> dict:
     conversation up to the answer (the rule of ``Turn.user_stated_text``: no card button values)."""
     from sqlalchemy import func, select
     from ..agent_chat_models import AgentMessage
-    from ..agent_workflow.direct import CONTROL_PREFIXES
+    from ..agent_workflow.write_text import CONTROL_PREFIXES
     M = AgentMessage
     citations = _record(row.tool_calls).get("citations")
     typed = db.execute(select(M.turn_id, M.content).where(M.conversation_id == row.conversation_id, M.role == "user",

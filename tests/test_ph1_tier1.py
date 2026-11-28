@@ -15,7 +15,7 @@ from app.agent_chat_models import AgentBot, AgentConversation, AgentMessage, Age
 from app.agent_chat_store import owner_hash
 from app.agent_workflow import consent
 from app.agent_workflow.authorization import authorized, vetoed
-from app.agent_workflow.direct import Turn
+pass  # (removed import of the old turn)
 from app.agent_workflow.evidence import gate_row
 from app.agent_workflow.models import AgentConsent
 from app.agent_workflow.state import AgentRuntimeContext
@@ -36,9 +36,9 @@ def owner(monkeypatch, disposable_database):
     with SessionLocal() as db:
         db.query(AgentProfileItem).delete()
         db.commit()
-    from app.agent_workflow import direct, tools
+    from app.agent_workflow import tools
     import app.agent_chat_identity as identity
-    for module in (consent, direct, tools, identity):
+    for module in (consent, tools, identity):
         monkeypatch.setattr(module, "owner_credential_matches", lambda c: c == OWNER)
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     return OWNER
@@ -58,7 +58,7 @@ async def _quiet(_event):
 
 
 def _turn(question, context):
-    from app.agent_workflow import direct
+    pass  # (removed import of the old turn)
     return asyncio.run(direct.run_direct_turn(question, context, emit=_quiet))
 
 
@@ -133,64 +133,6 @@ def _empty_extractor_turn(words, conversation, *actions, answer="好的。"):
     return _turn(words, _context(conversation, intent_recognizer=_route(*actions), decider=decider))
 
 
-def test_p1_in_turn_the_classifier_says_remember_and_the_model_did_not_a_card_rides_beside_the_answer(owner, monkeypatch):
-    _switch(monkeypatch, "FINBOT_PH1_MEMORY_FALLBACK", True)
-    result = _empty_extractor_turn(STANDING, "conv-ph1-on", "remember", answer="好的，之后都用亿元显示。")
-    card = result["pending_request"]
-    assert card and card["display"]["title"] == "记住这条偏好"
-    target = card["display"]["targets"][0]
-    assert target["title"] == STANDING and target["quote"] == STANDING
-    assert "好的，之后都用亿元显示。" in result["answer"] and "请核对确认卡" not in result["answer"]
-    assert result["status"] == "succeeded"
-    assert result["audit"].get("memory_fallback_card") is True and not result["audit"].get("memory_fallback")
-    assert profile.list_items(OWNER_HASH) == []  # nothing is written before the press
-
-
-@pytest.mark.parametrize("reply", ["好的", "ok", "确认"])
-def test_p1_a_side_card_does_not_swallow_the_next_typed_line(owner, monkeypatch, reply):
-    _switch(monkeypatch, "FINBOT_PH1_MEMORY_FALLBACK", True)
-    first = _empty_extractor_turn(STANDING, "conv-ph1-side-next", "remember", answer="好的，之后都用亿元显示。")
-    card = first["pending_request"]
-    assert card and card.get("side") is True
-
-    def decider(messages, _schemas):
-        return {"content": json.dumps({"items": []})} if _is_extract(messages) else {"content": "收到，有需要再问我。"}
-    context = _context("conv-ph1-side-next", intent_recognizer=_route(), decider=decider)
-    from app.agent_workflow import direct
-    second = asyncio.run(direct.run_direct_turn(reply, context, emit=_quiet, state={"pending_request": card}))
-    assert second["audit"].get("write_outcome") != "typed_consent"
-    assert "请点确认卡" not in second["answer"] and "收到，有需要再问我。" in second["answer"]
-    assert profile.list_items(OWNER_HASH) == []  # typing never presses the card
-
-
-def test_p1_an_ordinary_card_still_answers_typed_consent_with_the_button_hint(owner, monkeypatch):
-    _switch(monkeypatch, "FINBOT_PH1_MEMORY_FALLBACK", True)
-    first = _empty_extractor_turn(STANDING, "conv-ph1-side-plain", "remember", answer="好的，之后都用亿元显示。")
-    card = {k: v for k, v in first["pending_request"].items() if k != "side"}
-    context = _context("conv-ph1-side-plain", intent_recognizer=_route(), decider=lambda m, s: {"content": "不该被调用"})
-    from app.agent_workflow import direct
-    second = asyncio.run(direct.run_direct_turn("同意", context, emit=_quiet, state={"pending_request": card}))
-    assert second["audit"].get("write_outcome") == "typed_consent" and "请点确认卡" in second["answer"]
-
-
-@pytest.mark.parametrize("question", [QUESTION, "区别用什么指标衡量", "以后美联储降息对苹果有什么影响"])
-def test_p1_in_turn_a_wordlist_hit_alone_gives_no_card_no_row_and_leaves_background_reading_on(owner, monkeypatch, question):
-    from app.agent_workflow import direct
-    _switch(monkeypatch, "FINBOT_PH1_MEMORY_FALLBACK", True)
-    answered = "这是对问题的正常回答。"
-    result = _empty_extractor_turn(question, "conv-ph1-word", answer=answered)
-    audit = result["audit"]
-    assert answered in result["answer"] and not result.get("pending_request") and profile.list_items(OWNER_HASH) == []
-    assert audit.get("profile_ask") is True and not audit.get("remember_handled")
-    assert audit.get("memory_fallback_skipped") == "classifier_not_remember"
-    assert extract.remember_handled(audit) is False       # the background reading is scheduled as usual
-    # the word still hands the tool over, as on 2026-10-28
-    context = _context("conv-ph1-grant", intent_recognizer=_route(), decider=lambda *_: {"content": "好"})
-    turn = direct.Turn(question, context, _quiet, [{"role": "user", "content": question}], {})
-    asyncio.run(turn.classify())
-    assert "remember" in turn.granted_actions
-
-
 def test_p1_background_reading_stays_out_only_when_a_model_took_the_ask(monkeypatch):
     _switch(monkeypatch, "FINBOT_PH1_MEMORY_FALLBACK", True)
     assert extract.remember_handled({"profile_ask": True, "remember_handled": True}) is True
@@ -198,36 +140,6 @@ def test_p1_background_reading_stays_out_only_when_a_model_took_the_ask(monkeypa
     assert extract.remember_handled({}) is False and extract.remember_handled(None) is False
     _switch(monkeypatch, "FINBOT_PH1_MEMORY_FALLBACK", False)
     assert extract.remember_handled({"profile_ask": True}) is True   # the old reading of the word hit
-
-
-def test_p1_a_card_the_extractor_found_rides_beside_the_answer_too_and_counts_as_handled(owner, monkeypatch):
-    _switch(monkeypatch, "FINBOT_PH1_MEMORY_FALLBACK", True)
-    item = {"kind": "about_me", "topic": None, "text": "看好苹果的服务业务", "quote": "我看好苹果的服务业务"}
-
-    def decider(messages, _schemas):
-        if _is_extract(messages):
-            return {"content": json.dumps({"items": [item]}, ensure_ascii=False)}
-        return {"content": "好的，我记住了。"}
-    result = _turn("记住我看好苹果的服务业务", _context("conv-ph1-handled", intent_recognizer=_route(), decider=decider))
-    card = result["pending_request"]
-    assert result["status"] == "succeeded" and "好的，我记住了。" in result["answer"]
-    assert "尚未保存" in result["answer"]                       # the server says what the model's 记住了 is not yet
-    assert card["side"] is True and card["display"]["side"] is True
-    assert result["audit"].get("remember_handled") is True and extract.remember_handled(result["audit"]) is True
-    assert profile.list_items(OWNER_HASH) == []
-
-
-def test_p1_with_the_switch_off_a_found_card_still_ends_the_turn(owner, monkeypatch):
-    _switch(monkeypatch, "FINBOT_PH1_MEMORY_FALLBACK", False)
-    item = {"kind": "about_me", "topic": None, "text": "看好苹果的服务业务", "quote": "我看好苹果的服务业务"}
-
-    def decider(messages, _schemas):
-        if _is_extract(messages):
-            return {"content": json.dumps({"items": [item]}, ensure_ascii=False)}
-        return {"content": "好的，我记住了。"}
-    result = _turn("记住我看好苹果的服务业务", _context("conv-ph1-found-off", intent_recognizer=_route(), decider=decider))
-    assert result["status"] == "waiting_for_input" and "请核对确认卡" in result["answer"]
-    assert "side" not in result["pending_request"] and "side" not in result["pending_request"]["display"]
 
 
 def test_p1_a_side_card_turn_is_an_answered_turn_for_the_claim_check(monkeypatch):
@@ -240,39 +152,7 @@ def test_p1_a_side_card_turn_is_an_answered_turn_for_the_claim_check(monkeypatch
     assert claim_shadow.maybe_schedule({"pending_request": {"side": True}, "status": "succeeded", "citations": []}, ctx, {}) == "no_numbered_sources"
 
 
-def test_p1_in_turn_off_is_the_old_direct_write(owner, monkeypatch):
-    _switch(monkeypatch, "FINBOT_PH1_MEMORY_FALLBACK", False)
-    result = _empty_extractor_turn(STANDING, "conv-ph1-off")
-    assert not result.get("pending_request") and result["audit"].get("memory_fallback") is True
-    [item] = profile.list_items(OWNER_HASH)
-    assert item["origin"] == "explicit" and item["quote"] == STANDING
-
-
 # --- 2. M-1: first turn ordinal -------------------------------------------------------------------
-
-def _first_turn(question, resolver):
-    context = AgentRuntimeContext("p", "m", "k", conversation_id="c", resolver=resolver, classifier=lambda _: {"category": "D"},
-                                  decider=lambda *_: {"content": "好"})
-    turn = Turn(question, context, _quiet, [{"role": "user", "content": question}], {})
-    asyncio.run(turn.reference())
-    return turn
-
-
-@pytest.mark.parametrize("question", ["苹果最后一份财报讲了什么", "Show me Tesla's last filing", "第二季度财报怎么样"])
-def test_m1_a_first_turn_ordinal_word_reaches_the_resolver(monkeypatch, question):
-    _switch(monkeypatch, "FINBOT_PH1_FIRST_TURN_ORDINAL", True)
-    calls = []
-    turn = _first_turn(question, lambda payload: calls.append(payload) or {"relationship": "new"})
-    assert len(calls) == 1 and turn.pending is None
-
-
-@pytest.mark.parametrize("question", ["苹果最后一份财报讲了什么", "Show me Tesla's last filing"])
-def test_m1_off_the_old_card_returns_without_calling_the_resolver(monkeypatch, question):
-    _switch(monkeypatch, "FINBOT_PH1_FIRST_TURN_ORDINAL", False)
-    calls = []
-    turn = _first_turn(question, lambda payload: calls.append(payload) or {"relationship": "new"})
-    assert calls == [] and turn.pending and "当前没有可指代的清单" in json.dumps(turn.pending, ensure_ascii=False)
-
 
 # --- 3. M-3: a web page that does not spell the company ------------------------------------------
 
@@ -323,15 +203,6 @@ def test_m3_the_entity_note_carries_the_other_soft_notes_and_does_not_add_a_metr
     assert "requested_period_missing" in reason              # the quarter is not in the page: noted, not dropped
     named = _web_row(excerpt="Apple reported revenue of $90 billion for the quarter.")
     assert gate_row("AAPL revenue Q3 2024", named, symbol="AAPL", company="Apple Inc.", metrics=["revenue"], soft=True) == (True, "soft:requested_period_missing")
-
-
-def test_m3_a_soft_entity_row_does_not_borrow_the_scopes_symbol_in_its_citation(monkeypatch):
-    from tests.test_agent_scope_phase1 import _context, _step, _run, SECTOR_PAGE
-    _switch(monkeypatch, "FINBOT_PH1_WEB_ENTITY_SOFT", True)
-    context, _, _, _ = _context(classified={"symbol": "AAPL", "company": "Apple"}, steps=[_step("web_research", query="AAPL 新闻"), {"content": "没有可核验资料。"}],
-                                rows={"web_research": [SECTOR_PAGE]})
-    [citation] = _run("Apple（AAPL）最近有什么新闻", context)["citations"]
-    assert "requested_entity_missing" in citation["fields"]["gate_note"] and citation["symbol"] is None
 
 
 def test_m3_the_note_rides_on_the_row_the_model_reads(monkeypatch):
@@ -471,20 +342,6 @@ def test_p4_nothing_left_out_adds_nothing(owner, monkeypatch):
 
 
 # --- M-3 prompt: the note is explained where gate_note is -------------------------------------------
-
-def test_m3_the_prompt_explains_the_entity_note_only_when_the_switch_is_on(monkeypatch):
-    from app.agent_system_prompt import INSTRUCTION
-    from app.agent_workflow import direct
-    text = "\n".join(INSTRUCTION)
-    _switch(monkeypatch, "FINBOT_PH1_WEB_ENTITY_SOFT", True)
-    on = direct.evidence_instruction(text)
-    _switch(monkeypatch, "FINBOT_PH1_WEB_ENTITY_SOFT", False)
-    off = direct.evidence_instruction(text)
-    assert "requested_entity_missing" in on and "不相关别引用" in on
-    assert "requested_entity_missing" not in off
-    assert on.replace(direct.GATE_NOTE_ENTITY_SENTENCE, "", 1) == off
-    assert len(direct.GATE_NOTE_ENTITY_SENTENCE) <= 70   # the guest instruction has little room (test_b17)
-
 
 # --- the memory gate's key --------------------------------------------------------------------------
 

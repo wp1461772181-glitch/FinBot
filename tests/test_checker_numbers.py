@@ -12,7 +12,7 @@ from app import observability
 from app.agent_tool_catalog import CalculateArgs
 from app.agent_workflow import claim_numeric, evidence
 from app.agent_workflow.calculation import calculate
-from app.agent_workflow.direct import Turn
+pass  # (removed import of the old turn)
 from app.agent_workflow.evidence import (answer_scope, labelled_inference_lines, number_check, reviewed_answer,
                                          user_figure_values)
 from app.agent_workflow.state import AgentRuntimeContext
@@ -88,31 +88,6 @@ def test_the_scope_audit_lists_what_was_left_alone_and_what_no_source_holds():
     assert scope['counts'] == {'marked_figures': 1, 'unmarked_backstopped': 1, 'unmarked_exempted': 1, 'unmarked_no_holder': 2}
 
 
-def test_every_turn_records_audit_scope_and_it_reaches_the_trace_scores():
-    turn = _turn()
-    turn.route = 'A'
-    turn.citations = [{'ordinal': 1, 'quote': '100', 'source_type': 'saved_price'}]
-    result = turn.finish('AAPL 收盘价为 100 美元 [1]。')
-    scope = result['audit']['scope']
-    assert scope['marked_figures'] >= 1 and set(scope['counts']) == {
-        'marked_figures', 'unmarked_backstopped', 'unmarked_exempted', 'unmarked_no_holder'}
-
-    class Obs:
-        def __init__(self):
-            self.scores = {}
-
-        def score_trace(self, name, value, data_type, comment=None):
-            self.scores[name] = (value, comment)
-
-    obs = Obs()
-    observability.score_citation_audit(observability.Handle(obs), verified=1, unverified=0, scope={
-        'counts': {'marked_figures': 2, 'unmarked_backstopped': 0, 'unmarked_exempted': 1, 'unmarked_no_holder': 1},
-        'unmarked_exempted': [{'value': 87.0, 'line': '得分为 87'}], 'unmarked_no_holder': [{'value': 87.0, 'line': '得分为 87'}]})
-    assert obs.scores['scope_marked_figures'] == (2.0, None)
-    assert obs.scores['scope_unmarked_exempted'] == (1.0, '87.0: 得分为 87')
-    assert obs.scores['scope_unmarked_no_holder'][0] == 1.0
-
-
 def test_the_prompt_says_run_narration_needs_no_marker_and_does_not_describe_the_backstop():
     from app.agent_system_prompt import INSTRUCTION
     text = ''.join(INSTRUCTION)
@@ -133,20 +108,6 @@ def test_a_user_stated_figure_is_grounded_and_an_invented_one_is_not():
                         user_text='我有 5 万美元') == ([], [])
     assert number_check('按你的 5 万美元，可以买入。', [], user_text='我有 3 万美元') == ([5e4], [])
     assert number_check('按你的 5 万美元，可以买入。', []) == ([5e4], [])
-
-
-def test_user_stated_text_is_only_what_the_user_typed():
-    messages = [{'role': 'user', 'content': '我有 5 万美元'}, {'role': 'assistant', 'content': '你有 99 万美元'},
-                {'role': 'system', 'content': '系统说 77 万美元'}, {'role': 'user', 'content': 'confirm:abc 66 万美元'}]
-    turn = _turn('按我的钱算一下', messages)
-    turn.question = '模型改写后的问题：88 万美元'
-    text = turn.user_stated_text()
-    assert '5 万美元' in text and '按我的钱算一下' in text
-    for forbidden in ('99', '77', '66', '88'):
-        assert forbidden not in text
-    # An assistant-history figure and a figure only in the rewritten question ground nothing.
-    assert number_check('按 99 万美元计算。', [], user_text=text) == ([990000.0], [])
-    assert number_check('按 88 万美元计算。', [], user_text=text) == ([880000.0], [])
 
 
 def test_calculate_binds_a_user_stated_input_and_records_its_origin():
@@ -192,26 +153,6 @@ def test_the_whole_number_part_of_a_calculation_result_passes_and_other_whole_nu
 def test_a_user_figure_is_never_a_closure_operand():
     cites = [{'ordinal': 1, 'quote': '收益 300'}]
     assert number_check('合计 636 [1]。', cites, user_text='我之前有 336') == ([636.0], [])
-
-
-def test_a_rewritten_question_is_never_user_text():
-    turn = _turn('AAPL 收盘价')
-    turn.question = '改写：5 万美元'
-    assert '5 万' not in turn.user_stated_text()
-
-
-def test_a_turn_with_the_users_figure_in_its_history_is_not_flagged_for_restating_it():
-    turn = _turn('AAPL 收盘价是多少？', [{'role': 'user', 'content': '我有 5 万美元，AAPL 收盘价是多少？'}])
-    turn.route = 'A'
-    turn.citations = [{'ordinal': 1, 'quote': '227.5', 'source_type': 'saved_price'}]
-    result = turn.finish('按你的 5 万美元和收盘价 227.5 [1]。')
-    assert result['status'] == 'succeeded' and not result['unverified_lines']
-    other = _turn('AAPL 收盘价是多少？')
-    other.route = 'A'
-    other.citations = [{'ordinal': 1, 'quote': '227.5', 'source_type': 'saved_price'}]
-    flagged = other.finish('按你的 5 万美元和收盘价 227.5 [1]。')
-    # S0: the flag is audit-only and does not change status or the visible lines.
-    assert flagged['status'] == 'succeeded' and flagged['unverified_lines']==[] and flagged['audit']['legacy_review']['unverified_lines']
 
 
 # --- F2: constants, the laundering guard, closure ----------------------------------------------------------
@@ -278,15 +219,6 @@ def test_the_false_accept_rate_of_the_closure_is_bounded():
     invented = [rng.randint(100, 999) for _ in range(500)]
     accepted = sum(number_check(f'合计 {value} [1]。', cites) == ([], []) for value in invented)
     assert accepted / len(invented) <= evidence.CLOSURE_FALSE_ACCEPT_BOUND, accepted
-
-
-def test_a_closure_accepted_figure_reaches_the_turn_audit():
-    turn = _turn()
-    turn.route = 'A'
-    turn.citations = [{'ordinal': 1, 'quote': '300', 'source_type': 'saved_price'}, {'ordinal': 2, 'quote': '336', 'source_type': 'saved_price'}]
-    result = turn.finish('甲 300 [1]。乙 336 [2]。合计 636 [1][2]。')
-    assert result['status'] == 'succeeded'
-    assert result['audit']['closure_accepted'][0]['kind'] == 'sum' and len(result['audit']['closure_accepted']) <= 8
 
 
 # --- F3: the answer-wide verified set --------------------------------------------------------------------------

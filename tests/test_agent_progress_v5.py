@@ -7,60 +7,8 @@ import pytest
 from fastapi import HTTPException
 
 from app import agent_chat_provider as provider
-from app.agent_workflow import direct
+pass  # (removed import of the old turn)
 from app.agent_workflow.state import AgentRuntimeContext
-
-
-def test_cumulative_work_does_not_exhaust_healthy_turn():
-    # Successful work alone never stops a turn; only the wait (time, spend) ends gathering.
-    turn = direct.Turn('hello', AgentRuntimeContext('custom', 'test', 'dummy'), None, [], {})
-    turn.audit.update(tool_calls=500, distinct_successful_calls=500)
-    assert turn.budget() is None
-
-
-def test_a_long_wait_ends_gathering_but_not_the_turn():
-    turn = direct.Turn('hello', AgentRuntimeContext('custom', 'test', 'dummy'), None, [], {})
-    turn.started -= direct.SOFT_TURN_SECONDS + 1
-    assert turn.budget() == 'turn_budget' and turn.budget(soft=False) is None
-    turn.audit['token_usage'] = direct.SOFT_TURN_TOKENS + 1
-    turn.started += direct.SOFT_TURN_SECONDS
-    assert turn.budget() == 'turn_budget'
-    turn.started -= direct.HARD_TURN_SECONDS * 2
-    assert turn.budget(soft=False) == 'turn_budget'
-
-
-def test_decision_and_refused_call_ceilings_stop_a_runaway_turn():
-    """A turn ends on the decision ceiling or on repeated server-refused calls, never on spend."""
-    spent = direct.Turn('hello', AgentRuntimeContext('custom', 'test', 'dummy'), None, [], {})
-    spent.audit['decision_steps'] = direct.MAX_DECISION_STEPS
-    assert spent.budget() == 'no_progress'
-    refused = direct.Turn('hello', AgentRuntimeContext('custom', 'test', 'dummy'), None, [], {})
-    refused.invalid_calls = {f'bad-{i}' for i in range(direct.MAX_INVALID_CALLS)}
-    assert refused.budget() == 'no_progress'
-    healthy = direct.Turn('hello', AgentRuntimeContext('custom', 'test', 'dummy'), None, [], {})
-    healthy.audit['decision_steps'] = direct.MAX_DECISION_STEPS - 1
-    assert healthy.budget() is None
-
-
-def test_model_usage_is_recorded_after_old_cumulative_limit(monkeypatch):
-    async def response(*_,**__):return {'usage':{'total_tokens':19}},{'content':'ok'}
-    monkeypatch.setattr(direct,'decision_request',response)
-    t=direct.Turn('hello',AgentRuntimeContext('custom','test','dummy'),None,[],{})
-    t.audit['token_usage']=1_000_000
-    assert asyncio.run(t.model([{'role':'user','content':'hello'}],[]))['content']=='ok'
-    assert t.audit['token_usage']==1_000_019
-
-
-def test_long_work_keeps_recent_complete_tool_protocol_in_bounded_model_context():
-    t=direct.Turn('research',AgentRuntimeContext('custom','test','dummy'),None,[],{})
-    for i in range(100):
-        t.protocol.extend([{'role':'assistant','tool_calls':[{'id':str(i),'function':{'name':'query_system_status','arguments':'{"kind":"monitor"}'}}]},
-            {'role':'tool','tool_call_id':str(i),'content':json.dumps({'ok':True,'data':['x'*5000]})}])
-    payload=t.tool_messages()
-    assert len(json.dumps(payload).encode())<100000
-    ids={c['id'] for m in payload if m['role']=='assistant' for c in m.get('tool_calls',[])}
-    assert ids and all(m['tool_call_id'] in ids for m in payload if m['role']=='tool')
-    assert '99' in ids
 
 
 def test_watchdog_progress_renews_but_no_progress_expires():

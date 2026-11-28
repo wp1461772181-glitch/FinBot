@@ -9,7 +9,7 @@ import pytest
 from app import fin_news_engine as engine_mod
 from app.agent_chat_models import AgentConversation, AgentInboxItem, AgentMessage, NewsItem, NewsPushLog
 from app.agent_chat_store import owner_hash
-from app.agent_workflow import consent, direct, evidence, tools
+from app.agent_workflow import consent, evidence, tools
 from app.agent_workflow.state import AgentRuntimeContext
 from app.database import Base, SessionLocal, engine
 
@@ -50,7 +50,7 @@ def news_env(monkeypatch, disposable_database, tmp_path):
     engine_mod.set_http_fetcher(None)
 
     import app.agent_chat_identity as identity
-    for module in (consent, direct, tools, identity):
+    for module in (consent, tools, identity):
         monkeypatch.setattr(module, "owner_credential_matches", lambda c: c == OWNER)
     yield cfg_path
     engine_mod.set_http_fetcher(None)
@@ -88,128 +88,6 @@ def test_1_single_rss_source_returns_items_with_url(news_env):
     assert item["url"] == "https://finance.yahoo.com/news/nvda-gpu-rack-2026"
     assert "NVDA" in item["tickers"]
     assert res["meta"].get("hint") is None
-
-
-def test_2_all_sources_disabled_returns_empty_with_fallback_hint_and_agent_falls_back(news_env, monkeypatch):
-    """§8.2 所有源都 enabled: false 时，search_configured_news 返回空 + fallback_to_web_search_recommended，Agent 自动走网页搜索兜底。"""
-    cfg = engine_mod.load_config(news_env)
-    for src in cfg["sources"]:
-        src["enabled"] = False
-    engine_mod.save_config(cfg, news_env)
-
-    res = engine_mod.search_configured_news(tickers=["NVDA"])
-    assert res["items"] == []
-    assert res["meta"]["hint"] == "fallback_to_web_search_recommended"
-
-    calls_made: list[str] = []
-
-    def executor(name: str, args: dict):
-        calls_made.append(name)
-        if name == "search_configured_news":
-            return engine_mod.search_configured_news(**args)
-        if name == "web_research":
-            return {
-                "ok": True,
-                "data": [
-                    {
-                        "title": "NVDA AI News Fallback",
-                        "url": "https://example.com/nvda-fallback",
-                        "published_at": "2026-10-29",
-                        "excerpt": "NVIDIA share price rose 5 percent on new data center order.",
-                        "content_hash": "hash1",
-                    }
-                ],
-                "source": "public web",
-            }
-        raise AssertionError(name)
-
-    def resolver(payload: dict) -> dict:
-        return {"relationship": "new", "canonical_question": "查 NVDA 最新新闻", "symbols": ["NVDA"], "referents": []}
-
-    def recognizer(payload: dict) -> dict:
-        return {"category": "A", "mode": "none", "symbols": ["NVDA"]}
-
-    step_idx = {"n": 0}
-
-    def decider(_messages: list[dict], _tools: list[dict]) -> dict:
-        step_idx["n"] += 1
-        if step_idx["n"] == 1:
-            return _call("search_configured_news", {"tickers": ["NVDA"]}, "c1")
-        if step_idx["n"] == 2:
-            return _call("web_research", {"query": "NVDA latest news"}, "c2")
-        return {"content": "根据网页兜底检索，NVIDIA 因新数据中心订单上涨 5% [1]。"}
-
-    ctx = AgentRuntimeContext("custom", "test", "dummy", resolver=resolver, intent_recognizer=recognizer, decider=decider, executor=executor)
-    result = asyncio.run(direct.run_direct_turn("查 NVDA 最新新闻", ctx, emit=_quiet))
-    assert result["status"] == "succeeded"
-    assert calls_made == ["search_configured_news", "web_research"]
-
-
-def test_3_forged_news_item_without_url_is_rejected_by_citation_gate(news_env):
-    """§8.3 伪造一条没有 url 的新闻入库后，引用层拒绝该条作为证据（missing_citation_url）。"""
-    # 1. normalize_item rejects missing url
-    assert engine_mod.normalize_item({"title": "No URL News"}, {"id": "src1", "tier": "media"}) is None
-
-    # 2. Even if a row without URL is forged into evidence.gate_row or citation_errors, it is rejected
-    ok, reason = evidence.gate_row(
-        "NVDA revenue",
-        {"source_type": "configured_news", "title": "Forged News Without URL", "url": "", "summary": "Revenue was 999 billion."},
-    )
-    assert ok is False
-    assert reason == "missing_citation_url"
-
-    sources = [
-        {
-            "ordinal": 1,
-            "source_type": "configured_news",
-            "title": "Forged News Without URL",
-            "source_url": None,
-            "quote": "Revenue was 999 billion.",
-        }
-    ]
-    errors = direct.citation_errors("NVDA 营收达到 999 billion [1]。", sources)
-    assert errors == [1]
-
-
-def test_4_numeric_gate_enforced_on_configured_news_claims(news_env):
-    """§8.4 新闻条目里的数字进入事实句时，数字门禁仍然生效（未出现在证据里的数字被拦截并修复）。"""
-    sample_rss = """<?xml version="1.0" encoding="UTF-8"?>
-    <rss version="2.0"><channel><title>Feed</title>
-      <item>
-        <title>NVDA Q3 Preview</title>
-        <link>https://finance.yahoo.com/news/nvda-q3-preview</link>
-        <pubDate>Thu, 29 Oct 2026 09:00:00 GMT</pubDate>
-        <description>Analysts expect NVDA revenue of 35 billion dollars in Q3.</description>
-      </item>
-    </channel></rss>"""
-    engine_mod.set_http_fetcher(lambda url, headers, timeout: (200, sample_rss))
-
-    def resolver(payload: dict) -> dict:
-        return {"relationship": "new", "canonical_question": "NVDA Q3 新闻里预期营收多少？", "symbols": ["NVDA"], "referents": []}
-
-    def recognizer(payload: dict) -> dict:
-        return {"category": "A", "mode": "none", "symbols": ["NVDA"]}
-
-    turn_step = {"n": 0}
-
-    def decider(_messages: list[dict], _tools: list[dict]) -> dict:
-        turn_step["n"] += 1
-        if turn_step["n"] == 1:
-            return _call("search_configured_news", {"tickers": ["NVDA"], "refresh_first": True}, "c1")
-        if turn_step["n"] == 2:
-            # First draft fabricates 88 billion (not in the news item!) -> rejected by numeric gate
-            return {"content": "新闻显示分析师预计 NVDA Q3 营收为 88 billion dollars [1]。"}
-        # Repaired draft uses 35 billion from the cited news item
-        return {"content": "新闻显示分析师预计 NVDA Q3 营收为 35 billion dollars [1]。"}
-
-    ctx = AgentRuntimeContext("custom", "test", "dummy", resolver=resolver, intent_recognizer=recognizer, decider=decider)
-    result = asyncio.run(direct.run_direct_turn("NVDA Q3 新闻里预期营收多少？", ctx, emit=_quiet))
-    # The gate only annotates: the repair may fix [n] markers, not swap the figure, so the fabricated
-    # 88 billion stays in the answer, reported as an unverified number.
-    # S0: no repair round and no user-visible flag; the draft is kept as written and its check is audit-only.
-    assert result["status"] == "succeeded" and "88 billion" in result["answer"]
-    assert result["unverified_lines"] == [] and result["audit"]["legacy_review"]["unverified_lines"][0]["numbers"]
-    assert result["audit"].get("answer_repair_count") is None
 
 
 def test_5_push_summary_max_tokens_truncation_and_validation(news_env, client):

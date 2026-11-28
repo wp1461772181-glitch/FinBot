@@ -159,29 +159,6 @@ def test_disconnect_at_the_asgi_layer_does_not_cancel_the_turn(stream_fixture, c
     assert _stored_assistant(stored, "complete")
 
 
-def test_a_second_request_while_the_detached_turn_runs_gets_409_until_it_finishes(stream_fixture, cid, monkeypatch):
-    _quiet(monkeypatch)
-    _set_flag(monkeypatch, "on")
-    gate = {}
-    _workflow(monkeypatch, [{"event": "delta", "text": "partial"}], gate)
-
-    async def scenario():
-        gate["event"] = asyncio.Event()
-        body = (await _start(cid)).body_iterator
-        await _take(body, 3)
-        await body.aclose()
-        with pytest.raises(HTTPException) as busy:
-            await _start(cid)
-        assert busy.value.status_code == 409 and busy.value.detail == "conversation_busy"
-        gate["event"].set()
-        await stream.TURNS[cid]["task"]
-        second = await _start(cid)
-        wire = await _drain(second.body_iterator)
-        assert "event: done" in wire
-
-    _run(scenario())
-
-
 def test_explicit_cancel_stops_the_turn_through_the_normal_cancel_path(stream_fixture, cid, monkeypatch):
     recorded = []
 

@@ -48,7 +48,7 @@ MAX_NEWS_ALERTS = 10
 BRIEF_MAX_CHARS = 6000
 # Provider outages and stalls are worth one more (read-only) attempt; a refused key or model is not.
 def retryable(reason) -> bool:
-    from .agent_workflow.direct import RETRYABLE_PROVIDER
+    from .agent_workflow.write_text import RETRYABLE_PROVIDER
     return reason in RETRYABLE_PROVIDER or reason in {"no_progress", "workflow_incomplete"}
 NO_EVIDENCE_BODY = "这次运行没有取得带来源的证据，所以没有生成简报。可以打开对话查看过程，或调整任务说明。"
 QUIET_ANSWER = "无新消息"

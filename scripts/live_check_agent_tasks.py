@@ -21,9 +21,21 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from sqlalchemy import create_engine, text  # noqa: E402
 from sqlalchemy.engine import make_url  # noqa: E402
 
-# Imported before this script's own DATABASE_URL: importing live_check_profile points DATABASE_URL
-# at its own (never created) database, so ours must be set after it.
-from live_check_profile import env_value  # noqa: E402
+
+
+def env_value(name):
+    """A setting from the environment, else from the checkout's .env (as the removed live_check_profile read it)."""
+    if os.getenv(name):
+        return os.environ[name]
+    try:
+        for line in open(".env", encoding="utf-8"):
+            key, _, value = line.strip().partition("=")
+            if key.strip() == name:
+                return value.strip().strip('"').strip("'")
+    except OSError:
+        pass
+    return None
+
 
 ADMIN_URL = make_url(os.getenv("TEST_DATABASE_URL",
                                "postgresql+psycopg://market_evidence:market_evidence_dev@localhost:55432/test_market_evidence"))
@@ -59,7 +71,8 @@ def run(key: str, model: str) -> int:
     import app.agent_chat_identity as identity
     from app.agent_chat_models import AgentResearchQueue, AgentTask
     from app.agent_chat_store import engine as store_engine, owner_hash
-    from app.agent_workflow import consent, direct, tools
+    from app.agent_workflow import consent, tools
+    from app.kernel import act as kernel_act, loop as kernel_loop, prompt as kernel_prompt
     from app.agent_workflow.models import AgentConsent
     from app.database import Base, SessionLocal, engine
     import app.main  # noqa: F401  (registers every table on Base)
@@ -78,7 +91,7 @@ def run(key: str, model: str) -> int:
             await saver.setup()
     asyncio.run(migrate())
     owner = "live-owner-" + uuid.uuid4().hex
-    for module in (consent, direct, tools, identity):
+    for module in (consent, tools, kernel_act, kernel_loop, kernel_prompt, identity):
         module.owner_credential_matches = lambda c, o=owner: c == o
     hashed = owner_hash(owner)
     failures = []

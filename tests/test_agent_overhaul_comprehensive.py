@@ -14,7 +14,7 @@ from app.agent_tool_catalog import (
     RetrievalDiagnosticsArgs,
     WorkspaceArgs,
 )
-from app.agent_workflow.direct import execution_facts, execution_fallback, Turn
+from app.agent_workflow.write_text import execution_facts
 from app.agent_workflow.references import assistant_item_catalogue
 from app.forecast_revision_candidates import revision_candidates
 from app.database import Base, SessionLocal, engine
@@ -66,27 +66,6 @@ def test_save_material_evidence_schema():
     })
     assert valid.symbol == 'INTC'
     assert valid.credibility_stars == 5
-
-
-def test_execution_facts_carry_the_recorded_outcome_and_no_raw_json():
-    """The report the model narrates is built from these facts; none of them is prose or raw JSON."""
-    upload = execution_facts({'ok': True, 'data': [{
-        'id': 'c3c274a0-0000-0000-0000-000000000001', 'symbol': 'INTC',
-        'title': 'Intel IFS Foundry Roadmap Update', 'created': True, 'status': 'created'}]})
-    assert upload[0]['title'] == 'Intel IFS Foundry Roadmap Update'
-    assert upload[0]['symbol'] == 'INTC' and upload[0]['created'] is True
-
-    prices = execution_facts({'ok': True, 'data': [{'status': 'completed', 'inserted': 365}]})
-    assert prices[0]['inserted'] == 365 and prices[0]['status'] == 'completed'
-
-    revision = execution_facts({'ok': True, 'data': [{'revision_id': 'rev-1234', 'job_id': 'job-5678', 'status': 'queued'}]})
-    assert revision[0]['job_id'] == 'job-5678' and revision[0]['status'] == 'queued'
-
-    withdrawn = execution_facts({'ok': True, 'data': [{'document_id': 'doc-1234', 'status': 'withdrawn'}]})
-    assert withdrawn[0]['status'] == 'withdrawn'
-
-    for facts in (upload, prices, revision, withdrawn):
-        assert '{' not in execution_fallback(facts) and 'revision_id' not in str(facts)
 
 
 def test_assistant_item_catalogue_supports_bullets():
@@ -249,17 +228,3 @@ def test_revision_candidates_filtering():
             db.commit()
 
 
-def test_execution_facts_flatten_nested_consent_results():
-    """A multi-item consent result is flattened one fact per executed item."""
-    val = {'ok': True, 'status': 'complete', 'data': [
-        {'ok': True, 'data': [{'id': '2085f271-74c6-4676-8f34-7dc0d68cd458', 'symbol': 'AMD',
-                               'title': 'Advanced Micro Devices Inc(AMD)股票10月14日盤中下跌3.47%：背後推手曝光',
-                               'created': True, 'status': 'created'}]},
-        {'ok': True, 'data': [{'id': 'f2000e34-3c85-41e2-804f-1b5b4e1d993e', 'symbol': 'AMD',
-                               'title': 'Advanced Micro Devices Inc(AMD)股票10月16日盤中下跌3.79%：原因全解讀',
-                               'created': True, 'status': 'created'}]},
-    ]}
-    facts = execution_facts(val)
-    assert len(facts) == 2 and {f['symbol'] for f in facts} == {'AMD'}
-    fallback = execution_fallback(facts)
-    assert '10月14日盤中下跌3.47%' in fallback and '10月16日盤中下跌3.79%' in fallback

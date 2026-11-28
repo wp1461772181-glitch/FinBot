@@ -101,22 +101,3 @@ def test_sdk_errors_never_raise(keys):
     assert observability.start_trace("x") is None
 
 
-def test_turn_model_seam_records_generation(keys):
-    from app.agent_workflow.direct import Turn
-
-    fake = FakeClient()
-    observability._reset_for_tests(fake)
-    turn = object.__new__(Turn)
-    turn.context = SimpleNamespace(provider="p", model="m", token_budget=None, context_window=0)
-    turn.audit = {"token_usage": 0, "model_calls": 0, "usage_mode": "actual"}
-    turn.final_protocol = {}
-    turn.obs = observability.start_trace("agent-turn")
-
-    async def provider_request(messages, schemas):
-        return {"usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3}}, {"role": "assistant", "content": "hi"}
-
-    turn.provider_request = provider_request
-    message = asyncio.run(turn.model([{"role": "user", "content": "q"}], []))
-    assert message["content"] == "hi"
-    gens = [e for e in fake.log if isinstance(e, FakeObs) and e.kind == "generation"]
-    assert len(gens) == 1 and gens[0].ended and gens[0].kwargs["model"] == "m"

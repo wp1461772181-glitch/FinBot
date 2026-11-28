@@ -1,13 +1,13 @@
 """Kernel ``act``: the operation directory, the lookup and the preparation of a card.  Nothing here touches a database."""
 import asyncio
 from types import SimpleNamespace
-
+from app.agent_workflow import write_text
 import pytest
 
 from app import agent_profile as profile
 from app import agent_tasks, owner_views, portfolio
 from app.agent_tool_catalog import definitions
-from app.agent_workflow import direct, directory_ops, sec_sources, workspace_tools
+from app.agent_workflow import directory_ops, sec_sources, workspace_tools
 from app.kernel import act
 
 NOT_IN_SLICE = set()      # every catalogue write is in the directory now
@@ -110,7 +110,7 @@ def test_portfolio_error_returns_its_reason_and_no_card(monkeypatch):
 
 def test_create_routine_carries_the_bot(monkeypatch):
     monkeypatch.setattr(agent_tasks, "preview_task", fake_preview)         # no database: the file passes alone
-    monkeypatch.setattr(direct, "skill_names", lambda owner: {})
+    monkeypatch.setattr(write_text, "skill_names", lambda owner: {})
     args = {"name": "每日", "instruction": "看新闻", "schedule_kind": "daily", "schedule_time": "09:00", "symbols": ["NVDA", "AAPL"]}
     out = run(act.prepare(make_run(bot_id="bot-1"), "create_routine", args))
     assert out.operation["bot_id"] == "bot-1" and out.tier == 2
@@ -162,7 +162,7 @@ def test_routine_changes_and_deletes_need_an_existing_routine(monkeypatch):
     from app import watch_rules
     monkeypatch.setattr(watch_rules, "list_rules", lambda owner: [{"id": UUID, "symbol": "INTC", "text": "英特尔……"}])
     monkeypatch.setattr(watch_rules, "dry_run", lambda owner, fields, days=30, today=None: {"hits": [], "covered_days": 0, "note": None})
-    monkeypatch.setattr(direct, "skill_names", lambda owner: {})
+    monkeypatch.setattr(write_text, "skill_names", lambda owner: {})
     out = run(act.prepare(make_run(), "update_routine", {"routine_id": UUID, "enabled": False}))
     assert out.display["title"] == "修改例行任务 · 每日" and out.display["alternative"] == "状态：运行中 → 暂停"
     out = run(act.prepare(make_run(), "delete_routine", {"routine_id": UUID}))
@@ -186,7 +186,7 @@ def test_fetch_sec_uses_the_prepared_filing(monkeypatch):
 
 
 def test_review_filing_names_the_document(monkeypatch):
-    monkeypatch.setattr(direct, "source_display_title", lambda kind, source_id: "Apple 10-K")
+    monkeypatch.setattr(write_text, "source_display_title", lambda kind, source_id: "Apple 10-K")
     out = run(act.prepare(make_run(), "review_filing", {"source_id": UUID, "decision": "rejected"}))
     assert out.tier == 2
     assert out.display["targets"] == [{"title": "Apple 10-K", "source_type": "SEC 申报", "decision": "标记为不相关"}]
@@ -271,7 +271,7 @@ def faked(monkeypatch):
     from app import watch_presets
     monkeypatch.setattr(watch_presets, "_overrides", lambda owner: {})          # no database: every default is at its default
     monkeypatch.setattr(watch_presets, "get_settings", lambda owner: {"sensitivity": "standard", "short_moves": False})
-    monkeypatch.setattr(direct, "skill_names", lambda owner: {})
+    monkeypatch.setattr(write_text, "skill_names", lambda owner: {})
     monkeypatch.setattr(act, "_already_saved", lambda *a: None)
     monkeypatch.setattr(workspace_tools, "revision_plan", lambda *a: ready_plan())
     monkeypatch.setattr(profile, "user_message_id", lambda *a: "m1")
@@ -285,7 +285,7 @@ def faked(monkeypatch):
                                                                                    "text": "营收 280 亿美元", "at": datetime(2026, 11, 27, 1, 0, tzinfo=UTC)})
     monkeypatch.setattr(profile, "resolve_handle", lambda *a, **k: {"text": "用中文"})
     monkeypatch.setattr(agent_tasks, "get_task", lambda *a: fake_preview("o", {}))
-    monkeypatch.setattr(direct, "source_display_title", lambda *a: "某材料")
+    monkeypatch.setattr(write_text, "source_display_title", lambda *a: "某材料")
     monkeypatch.setattr(portfolio, "describe_write", lambda *a: {"title": "t", "targets": [{"symbol": "AAPL"}], "alternative": "a"})
     monkeypatch.setattr(directory_ops, "describe", lambda owner, name, args: {"title": "t", "targets": [{"kind": "k"}], "alternative": "a"})
     monkeypatch.setattr(sec_sources, "prepare_filing", lambda name, args, financial_only=False: {
@@ -435,7 +435,7 @@ def test_a_ready_revision_is_a_proposal_with_options_and_the_frozen_candidates(m
     run_ = make_run()
     out = revise(run_, symbol="AAPL", mentioned_sources=[{"source_type": "uploaded_media", "source_id": U}])
     assert seen[0][0] == "AAPL" and seen[0][1] is None and seen[0][2] is run_.context and seen[0][3] == [{"source_type": "uploaded_media", "source_id": U}]
-    assert out.tier == 3 and len(out.options) == direct.REVISION_CARD_LIMIT == 10
+    assert out.tier == 3 and len(out.options) == write_text.REVISION_CARD_LIMIT == 10
     assert out.options[0] == {"value": "1", "label": "材料1", "detail": "上传材料 · 2026-01-01 发布 · 预测后发布"}
     assert [o["value"] for o in out.options] == [str(i) for i in range(1, 11)]
     operation = out.operation
@@ -453,7 +453,7 @@ def test_a_revision_that_is_not_ready_says_why_and_makes_no_card(monkeypatch):
     monkeypatch.setattr(workspace_tools, "revision_plan", lambda *a: plan)
     out = revise(symbol="AAPL")
     assert isinstance(out, dict) and out["ok"] is False and out["error_code"] == "target_expired"
-    assert out["reason"] == direct.revision_notice(plan) and "不能再修订" in out["reason"]
+    assert out["reason"] == write_text.revision_notice(plan) and "不能再修订" in out["reason"]
 
 
 def test_a_revision_names_its_symbol_and_the_model_cannot_name_materials(monkeypatch):

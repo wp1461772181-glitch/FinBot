@@ -8,11 +8,11 @@ from pathlib import Path
 import pytest
 
 from app.agent_tool_catalog import validate
-from app.agent_workflow.direct import Turn
+pass  # (removed import of the old turn)
 from app.agent_workflow.history_citations import (
     HISTORY_PAGE_NOTE, HISTORY_STORED_PARTIAL_NOTE, bind_history_citation, read_history_citation)
 from app.agent_workflow.state import AgentRuntimeContext
-from app.agent_workflow.truncation import fit_observations
+pass  # (removed import of the old turn)
 
 TURN = "0c1f1a2b-3c4d-4e5f-8a9b-0c1d2e3f4a5b"
 # 11,248 characters; the figure sits at 8,991–8,996, beyond the 5,000-character display quote and on page 2.
@@ -109,50 +109,6 @@ def test_bound_row_carries_the_page_facts_only_when_they_were_read():
     legacy = {"ok": True, "_snapshot": {"title": "t"}, "data": [{
         "title": "t", "source_type": "s", "quote": "q", "truncated": False, "origin": {"turn_id": TURN, "ordinal": 1}}]}
     assert set(bind_history_citation(legacy, [])["data"][0]) == {"citation", "title", "source_type", "quote", "truncated"}
-
-
-def _recall_turn(monkeypatch, ordinals_bodies):
-    """Three resolver-bound long sources; the marker sits at 7,500, past the display length and inside one 8,000 page."""
-    citations = {n: _filing(n, body) for n, body in ordinals_bodies.items()}
-    _store(monkeypatch, citations)
-    context = _context(tuple(ordinals_bodies))
-    async def emit(_):
-        pass
-    turn = Turn("q", context, emit, [], {})
-    turn.bound_history_citations = [{"turn_id": TURN, "ordinal": n, "derived": False} for n in ordinals_bodies]
-    return turn
-
-
-def test_auto_recall_reads_the_first_long_source_in_full_and_later_ones_at_display_length(monkeypatch):
-    marker = "M7500"
-    long_body = lambda tag: "a" * 7450 + f"{tag}{marker}" + "b" * (11000 - 7450 - len(tag) - len(marker))
-    turn = _recall_turn(monkeypatch, {1: long_body("X1"), 2: long_body("X2"), 3: long_body("X3")})
-    assert asyncio.run(turn.recall_bound_citations()) is True
-    reads = [o for o in turn.observations if o.get("name") == "read_history_citation"]
-    quotes = [o["result"]["data"][0]["quote"] for o in reads]
-    assert [len(q) for q in quotes] == [8000, 5000, 5000]
-    assert "X1" + marker in quotes[0]
-    kept, omitted, _, _ = fit_observations(turn.observations, 22000)
-    assert omitted == []
-    assert any("X1" + marker in str(o.get("result")) for o in kept)
-
-
-def test_auto_recall_with_the_flag_off_reads_as_before(monkeypatch):
-    monkeypatch.setenv("FINBOT_SW2_HISTORY_PAGES", "off")
-    turn = _recall_turn(monkeypatch, {1: "a" * 11000, 2: "b" * 11000})
-    asyncio.run(turn.recall_bound_citations())
-    reads = [o for o in turn.observations if o.get("name") == "read_history_citation"]
-    assert [len(o["result"]["data"][0]["quote"]) for o in reads] == [5000, 5000]
-    assert all("note" not in o["result"]["data"][0] for o in reads)
-
-
-def test_one_full_page_fits_the_evidence_budget_beside_its_neighbours(monkeypatch):
-    """B9: an 8,000-character page is kept whole by the 22,000-character evidence budget."""
-    turn = _recall_turn(monkeypatch, {1: "c" * 11000})
-    asyncio.run(turn.recall_bound_citations())
-    kept, omitted, _, used = fit_observations(turn.observations, 22000)
-    assert omitted == [] and used <= 22000
-    assert any(len(o["result"]["data"][0]["quote"]) == 8000 for o in kept)
 
 
 @pytest.mark.parametrize("value,offset_present,sentence_present", [("on", True, True), ("off", False, False)])

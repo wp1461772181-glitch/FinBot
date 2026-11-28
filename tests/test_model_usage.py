@@ -763,27 +763,6 @@ def test_the_catalog_api_takes_and_returns_prices_and_refuses_a_bad_one(clean_ca
     assert client.patch("/agent-chat/model-catalog/apiprice", headers={"X-Chat-Session": GUEST}, json={"price_input": 1}).status_code == 403
 
 
-def test_the_old_engines_retry_is_a_second_attempt_row(monkeypatch):
-    from app.agent_workflow import direct
-    from app.agent_workflow.state import AgentRuntimeContext
-    owner = unique()
-    fake_transport(monkeypatch, [respond(b"", 502), respond(answer_body("好"))])
-
-    async def emit(_):
-        pass
-
-    turn = direct.Turn("q", AgentRuntimeContext("siliconflow", "m", SECRET), emit, [], {})
-
-    async def main():
-        with model_usage.purpose("chat", owner_hash=owner):
-            return await turn.provider_request([{"role": "user", "content": "q"}], [])
-
-    _, message = asyncio.run(main())
-    assert message["content"] == "好" and turn.audit["provider_retries"] == 1
-    first, second = rows(owner_hash=owner)
-    assert (first.attempt, first.ok, second.attempt, second.ok) == (1, False, 2, True)
-
-
 # --- fix round 1 ---------------------------------------------------------------------------------------------------
 
 def test_a_chat_turn_that_runs_the_judge_on_another_model_gives_two_rows_with_two_catalog_names(kernel):

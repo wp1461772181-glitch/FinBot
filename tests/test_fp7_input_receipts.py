@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from app.agent_workflow import direct
+pass  # (removed import of the old turn)
 from app.agent_workflow.calculation import CalculationUnbound, calculate
 from app.agent_workflow.state import AgentRuntimeContext
 
@@ -155,39 +155,6 @@ def test_closest_in_source_is_at_most_three_and_hints_never_suggest_expansion():
 def test_replay_of_a_user_stated_input_is_taken_as_recorded():
     args = {'expression': 'a*2', 'inputs': [{'name': 'a', 'value': '77', 'user_stated': True}]}
     assert calculate(args, [], None)['value'] == '154.00'
-
-
-def test_receipts_reach_the_model_through_accept_and_the_tool_message():
-    args = {'expression': 'a*2', 'inputs': [{'name': 'a', 'value': '123', 'source_ordinal': 1}], 'decimals': 2}
-    turn = _turn(REVENUE)
-    outcome = asyncio.run(turn.execute_read('calculate', args))
-    assert outcome['ok'] is False and outcome['error_code'] == 'calculation_input_unbound'
-    assert outcome['candidates_complete'] is False and outcome['hint'] == HINT
-    turn.accept('calculate', args, outcome)
-    entry = turn.feedback[-1]
-    assert entry['ok'] is False and entry['candidates_complete'] is False
-    assert entry['input_receipts'][0]['reason'] == 'value_not_in_source'
-    # agent_loop's tool message, as direct.py assembles it (last_accepted, then the feedback entry, then tools.error).
-    safe_result = turn.last_accepted
-    if safe_result is None and turn.feedback:
-        feedback = turn.feedback[-1]
-        safe_result = feedback.get('result') or (feedback if 'ok' in feedback else None)
-    assert safe_result is not None and 'input_receipts' in safe_result
-    assert safe_result['input_receipts'][0]['found'] is False
-    json.dumps(safe_result)
-
-
-def test_switch_off_is_the_bare_code_with_no_receipts(monkeypatch):
-    monkeypatch.setenv(SWITCH, 'off')
-    args = {'expression': 'a*2', 'inputs': [{'name': 'a', 'value': '123', 'source_ordinal': 1}], 'decimals': 2}
-    with pytest.raises(ValueError) as exc:
-        calculate(args, REVENUE, '')
-    assert type(exc.value) is ValueError and str(exc.value) == 'calculation_input_unbound'
-    turn = _turn(REVENUE)
-    outcome = asyncio.run(turn.execute_read('calculate', args))
-    assert 'input_receipts' not in outcome and 'candidates_complete' not in outcome
-    turn.accept('calculate', args, outcome)
-    assert turn.feedback[-1] == {'name': 'calculate', 'error_code': 'calculation_input_unbound', 'hint': None}
 
 
 def test_the_exception_carries_its_receipts_and_the_bare_message():

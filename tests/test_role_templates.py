@@ -163,9 +163,9 @@ def owner(monkeypatch, disposable_database):
             db.query(model).delete()
         db.commit()
     agent_skills.seed_builtins()
-    from app.agent_workflow import consent, direct, tools
+    from app.agent_workflow import consent, tools
     import app.agent_chat_identity as identity
-    for module in (consent, direct, tools, identity):
+    for module in (consent, tools, identity):
         monkeypatch.setattr(module, "owner_credential_matches", lambda c: c in {OWNER, OTHER})
     monkeypatch.delenv("FINBOT_DUTY_MODE", raising=False)
     return OWNER_HASH

@@ -38,7 +38,7 @@ ASK_SCHEMA: dict = {
 
 
 def card(question: str, options: list[str], original_question: str) -> dict:
-    """The old engine's question card (``Turn.card``): each option is a button whose value is ``reply:<option>``."""
+    """A question card, in the shape the old engine's ``Turn.card`` gave it (every client reads it): each option is a button whose value is ``reply:<option>``."""
     return {"id": str(uuid.uuid4()), "reason": "missing_information", "question": question, "original_question": original_question,
             "expires_at": (datetime.now(UTC) + timedelta(minutes=EXPIRES_MINUTES)).isoformat(),
             "choices": [{"label": option, "value": "reply:" + option} for option in options]}

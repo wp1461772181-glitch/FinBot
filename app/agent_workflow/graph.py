@@ -1,7 +1,7 @@
-"""Production graph for the direct A/B/C/D agent workflow.
+"""The production turn graph: one node that runs the kernel's turn (``app.kernel.loop.run_turn``).
 
-Routing and evidence decisions live in ``direct.py``. This module keeps the existing
-LangGraph/checkpoint and streaming API without retaining the former planner engine.
+It keeps the LangGraph checkpoint (the conversation's pending card and result sets) and the streaming API the endpoint reads.
+The old turn (``direct.py``: classify, route, the old tool loop) was removed in stage 6b; every turn is the kernel's.
 """
 from __future__ import annotations
 
@@ -29,15 +29,9 @@ async def _direct_agent_turn(state: AgentWorkflowState, runtime: Runtime[AgentRu
         kind = event.pop("event")
         try: get_stream_writer()({"event": kind, **event})
         except RuntimeError: pass
-    # The kernel runs for engine "v2" with the flag on (``_engine``): every turn, a scheduled one too, unless a switch sends it back.
-    if kernel_runs(runtime.context.engine):
-        from ..kernel.loop import run_turn as run_kernel_turn
-        result = await run_kernel_turn(state.get("question", ""), runtime.context, emit=publish,
-                                       messages=state.get("messages", []), state=state)
-    else:
-        from .direct import run_direct_turn
-        result = await run_direct_turn(state.get("question", ""), runtime.context, emit=publish,
-                                       messages=state.get("messages", []), state=state)
+    from ..kernel.loop import run_turn as run_kernel_turn
+    result = await run_kernel_turn(state.get("question", ""), runtime.context, emit=publish,
+                                   messages=state.get("messages", []), state=state)
     answer = result["answer"]
     # LLM claim judge, stage 2 (shadow): takes a snapshot and returns at once; never touches the answer.
     judge_schedule = None
@@ -78,7 +72,7 @@ async def _direct_agent_turn(state: AgentWorkflowState, runtime: Runtime[AgentRu
 
 def build_workflow(checkpointer=None):
     builder = StateGraph(AgentWorkflowState, context_schema=AgentRuntimeContext)
-    builder.add_node("direct_agent_turn", _direct_agent_turn)
+    builder.add_node("direct_agent_turn", _direct_agent_turn)      # the old name: the conversations' checkpoints are keyed by it
     builder.add_edge(START, "direct_agent_turn")
     builder.add_edge("direct_agent_turn", END)
     return builder.compile(checkpointer=checkpointer)
@@ -87,29 +81,6 @@ def build_workflow(checkpointer=None):
 def layers_default_window() -> int:
     from ..agent_context import WINDOW_TOKENS
     return WINDOW_TOKENS
-
-
-def _engine(bot: dict, unattended: bool) -> str:
-    """The turn engine: "v2" the kernel, "v1" the old turn.  A bot that names one gets it; a bot that names none, and a turn with no bot,
-    get FINBOT_KERNEL_DEFAULT: only the exact value "v1" keeps the old turn, anything else (unset included) is the kernel.  A scheduled
-    task (unattended) follows the same rule; FINBOT_KERNEL_ROUTINES off sends every scheduled task back to the old turn."""
-    import os
-    if unattended and not flag("FINBOT_KERNEL_ROUTINES", True):
-        return "v1"
-    engine = bot.get("engine")
-    if engine in ("v1", "v2"):
-        return engine
-    return "v1" if os.environ.get("FINBOT_KERNEL_DEFAULT") == "v1" else "v2"
-
-
-def kernel_runs(engine: str | None) -> bool:
-    """Whether a turn whose resolved engine is this runs on the kernel (what the graph asks)."""
-    return engine == "v2" and flag("FINBOT_KERNEL_V2", True)
-
-
-def kernel_turn(bot: dict | None, unattended: bool = False) -> bool:
-    """Whether a turn of this bot runs on the kernel: the one decision the graph and the endpoint share."""
-    return kernel_runs(_engine(bot or {}, unattended))
 
 
 async def stream_workflow(*, question: str, messages: list[dict], provider: str, model: str,
@@ -135,7 +106,7 @@ async def stream_workflow(*, question: str, messages: list[dict], provider: str,
         profile_block=profile_block, unattended=unattended, token_budget=token_budget, action_sink=action_sink,
         bot_id=bot.get("bot_id"), bot_name=bot.get("bot_name"), bot_is_default=bool(bot.get("is_default")),
         bot_block=bot.get("block"), tool_scope=bot.get("tool_scope"),
-        reasoning_effort=bot.get("reasoning_effort"), engine=_engine(bot, unattended),
+        reasoning_effort=bot.get("reasoning_effort"), engine="v2",
         default_company=bot.get("default_company"), skill_block=skill_block, active_skill=active_skill,
         context_window=context_window or layers_default_window(), self_state=self_state, catalog_name=catalog_name, inbox=inbox)
     thread = checkpoint_thread_id(owner_hash, conversation_id)
@@ -168,16 +139,3 @@ async def set_pending_request(owner_hash: str, conversation_id: str, card: dict)
         graph = build_workflow(saver)
         config = {"configurable": {"thread_id": checkpoint_thread_id(owner_hash, conversation_id)}}
         await graph.aupdate_state(config, {"pending_request": card})
-
-
-async def run_workflow(**kwargs) -> dict:
-    from .checkpoints import open_postgres_checkpointer
-    from .settings import checkpoint_database_url
-    context = AgentRuntimeContext(provider=kwargs["provider"], model=kwargs["model"], api_key=kwargs["api_key"],
-        base_url=kwargs.get("base_url"), owner_hash=kwargs["owner_hash"], conversation_id=kwargs["conversation_id"],
-        identity_credential=kwargs.get("identity_credential", ""))
-    async with open_postgres_checkpointer(checkpoint_database_url()) as saver:
-        graph = build_workflow(saver)
-        return await graph.ainvoke({"question": kwargs["question"], "messages": kwargs["messages"]},
-            {"configurable": {"thread_id": checkpoint_thread_id(kwargs["owner_hash"], kwargs["conversation_id"])},
-             "recursion_limit": 30}, context=context)

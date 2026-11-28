@@ -31,11 +31,3 @@ def test_local_transport_has_only_model_routes_and_public_transport_stays_privat
     asyncio.run(exercise())
     assert seen==[base+'/chat/completions']
 
-def test_safe_key_configuration_question_reaches_model_without_secret_capability():
-    from app.agent_workflow.direct import run_direct_turn
-    from app.agent_workflow.state import AgentRuntimeContext
-    calls=[]
-    async def emit(_):pass
-    ctx=AgentRuntimeContext('custom','test','not-a-real-key',classifier=lambda _:calls.append(1) or 'D',decider=lambda *_:{'content':'在 Agent 页的模型设置中填写自己的 API Key。'})
-    result=asyncio.run(run_direct_turn('API Key 在哪里填？',ctx,emit=emit))
-    assert calls==[1] and '模型设置' in result['answer']

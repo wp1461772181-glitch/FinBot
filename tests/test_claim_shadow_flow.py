@@ -127,7 +127,7 @@ def test_direct_agent_turn_identical_output_and_check_text_kept_within_cap(monke
         runtime.context = MagicMock(unattended=False, provider="openrouter", model="deepseek/deepseek-v4-flash", identity_credential="owner-cred")
         state = {"question": "Northwind 营收情况？", "messages": []}
 
-        with patch("app.agent_workflow.direct.run_direct_turn", AsyncMock(return_value=dict(direct_result))):
+        with patch("app.kernel.loop.run_turn", AsyncMock(return_value=dict(direct_result))):
             with patch("app.agent_workflow.graph.get_stream_writer") as mock_writer:
                 mock_write = MagicMock()
                 mock_writer.return_value = mock_write
@@ -184,7 +184,7 @@ def test_judge_hanging_does_not_block_direct_turn(monkeypatch, tmp_path: Path):
         runtime.context = MagicMock(unattended=False)
         state = {"question": "Q?"}
 
-        with patch("app.agent_workflow.direct.run_direct_turn", AsyncMock(return_value=dict(direct_result))):
+        with patch("app.kernel.loop.run_turn", AsyncMock(return_value=dict(direct_result))):
             with patch("app.agent_workflow.graph.get_stream_writer") as mock_writer:
                 emitted = []
                 mock_writer.return_value = lambda ev: emitted.append(ev.get("event"))
@@ -205,7 +205,7 @@ def test_maybe_schedule_exception_does_not_crash_direct_turn(monkeypatch):
         direct_result = {"answer": "answer", "citations": [], "status": "succeeded"}
 
         with patch("app.agent_workflow.claim_shadow.maybe_schedule", side_effect=RuntimeError("internal boom")):
-            with patch("app.agent_workflow.direct.run_direct_turn", AsyncMock(return_value=direct_result)):
+            with patch("app.kernel.loop.run_turn", AsyncMock(return_value=direct_result)):
                 with patch("app.agent_workflow.graph.get_stream_writer"):
                     res = await _direct_agent_turn(state, runtime)
                     assert res["answer"] == "answer"
@@ -530,7 +530,7 @@ def test_real_catalog_resolve_import_regression(monkeypatch, tmp_path: Path):
         runtime.context = MagicMock(unattended=False, provider="openrouter", model="deepseek/deepseek-v4-flash", identity_credential="owner-cred")
         state = {"question": "Northwind 营收情况？", "messages": []}
 
-        with patch("app.agent_workflow.direct.run_direct_turn", AsyncMock(return_value=dict(direct_result))):
+        with patch("app.kernel.loop.run_turn", AsyncMock(return_value=dict(direct_result))):
             with patch("app.agent_workflow.graph.get_stream_writer") as mock_writer:
                 mock_writer.return_value = MagicMock()
                 await _direct_agent_turn(state, runtime)

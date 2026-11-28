@@ -60,8 +60,8 @@ def owner(monkeypatch, disposable_database, tmp_path):
     wipe()
     import app.agent_chat_identity as identity
     import app.agent_chat_stream as stream
-    from app.agent_workflow import direct, tools
-    for module in (consent, direct, tools, identity, act, stream):
+    from app.agent_workflow import tools
+    for module in (consent, tools, identity, act, stream):
         monkeypatch.setattr(module, "owner_credential_matches", lambda c: c == OWNER, raising=False)
     monkeypatch.setenv("SENTINEL_CONFIG_PATH", str(tmp_path / "sentinel-config.json"))
     refreshed = []
@@ -669,31 +669,3 @@ BEFORE_3A = {
 }
 
 
-def test_the_old_engines_classifier_request_action_tools_and_prompts_are_byte_identical_to_before_3a():
-    import hashlib
-    from app import agent_tool_catalog as c
-    from app.agent_system_prompt import INSTRUCTION, disclosure_note
-    from app.agent_workflow import direct, routing
-
-    def h(x):
-        return hashlib.sha256(json.dumps(x, sort_keys=True, ensure_ascii=False, default=str).encode()).hexdigest()[:16]
-    view = c.legacy_definitions()
-    every_write = {n for n, p in view.items() if p.level in {"reversible", "costly"}}
-    now = {"write_catalogue": h(direct.write_tool_catalogue()),
-           "request_action": h(view["request_action"].args_schema.model_json_schema()) + h(view["request_action"].description),
-           "owner_tools": h(c.schemas(owner=True, granted=every_write)), "guest_tools": h(c.schemas(owner=False)),
-           "classifier_schema": h(routing.Routing.model_json_schema()),
-           "categories": h({k: [v.summary, list(v.tools)] for k, v in c.TOOL_CATEGORIES.items()}),
-           "disclosure": h(disclosure_note(c.TOOL_CATEGORIES.values())), "instruction": h(list(INSTRUCTION)), "write_names": h(sorted(c.write_tool_names()))}
-    assert now == BEFORE_3A
-    for name in c.KERNEL_ONLY:
-        assert name not in view and name not in c.write_tool_names()
-        assert name not in {s["function"]["name"] for s in c.schemas(owner=True, granted=set(c.definitions()))}
-    kernel = {s["function"]["name"] for s in c.schemas(owner=True, kernel=True, names={"list_models"})}
-    assert kernel == {"list_models"}
-
-
-def test_the_old_engines_classifier_drops_the_new_operations():
-    from app.agent_workflow.routing import parse_route
-    route = parse_route(json.dumps({"category": "D", "days_back": None, "requested_actions": ["set_default_model", "record_trade", "delete_transaction"]}))
-    assert route.requested_actions == ["record_trade"]

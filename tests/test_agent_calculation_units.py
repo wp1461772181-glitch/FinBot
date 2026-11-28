@@ -3,7 +3,7 @@ import asyncio,json
 import pytest
 from fastapi import HTTPException
 from app.agent_workflow.calculation import calculate
-from app.agent_workflow import direct
+pass  # (removed import of the old turn)
 from app.agent_workflow.state import AgentRuntimeContext
 
 SOURCE=[{'ordinal':1,'source_type':'calculation','quote':'{"value": "50115000000.00"}'}]
@@ -18,17 +18,6 @@ def test_an_arbitrary_constant_is_still_refused():
     for expression in ('a*1001','a*0.00001','a*7777'):
         with pytest.raises(ValueError):
             calculate({'expression':expression,'inputs':[{'name':'a','value':'50115000000','source_ordinal':1}]},SOURCE)
-
-def test_a_provider_failure_mid_loop_answers_from_the_evidence_gathered():
-    steps=iter([{'tool_calls':[{'id':'1','function':{'name':'query_stock_prices','arguments':json.dumps({'symbol':'AMD'})}}]}])
-    def decide(messages,tools):
-        try:return next(steps)
-        except StopIteration:raise HTTPException(502,'provider_protocol_too_large')
-    async def emit(_):pass
-    ctx=AgentRuntimeContext('custom','test','dummy',classifier=lambda _:'D',decider=decide,answerer=lambda messages:'AMD 已保存收盘价 100 美元 [1]。',
-        executor=lambda *_:{'ok':True,'data':[{'id':'p','symbol':'AMD','close':100}]})
-    result=asyncio.run(direct.run_direct_turn('AMD 收盘价',ctx,emit=emit))
-    assert result['status']=='succeeded' and result['answer'].startswith('AMD 已保存收盘价 100 美元 [1]')
 
 def test_a_value_written_per_million_binds_and_its_result_may_be_restated_in_yi():
     from app.agent_workflow.evidence import unsupported_number_values

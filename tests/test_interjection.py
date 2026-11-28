@@ -316,7 +316,6 @@ class Lab:
         self.moved = []
         self.contexts = []
         monkeypatch.setattr(stream, "QUEUE_POLL_SECONDS", 0.02)
-        monkeypatch.setenv("FINBOT_KERNEL_DEFAULT", "v2")
         lab = self
 
         async def append(*args, **kwargs):
@@ -538,23 +537,6 @@ def test_a_separate_turn_still_starts_when_the_request_that_brought_it_is_droppe
         await asyncio.sleep(0.1)
     _scenario(scenario())
     assert len(lab.answers()) == 2
-
-
-def test_old_engine_turns_keep_the_409_while_the_conversation_is_busy(lab):
-    from fastapi import HTTPException
-    lab.w.bot["engine"] = "v1"
-    lab.monkeypatch.delenv("FINBOT_KERNEL_DEFAULT")
-    lock = asyncio.Lock()
-
-    async def scenario():
-        await lock.acquire()
-        stream.LOCKS[lab.cid] = lock
-        with pytest.raises(HTTPException) as busy:
-            await lab.send("再问一句")
-        assert busy.value.status_code == 409 and busy.value.detail == "conversation_busy"
-        lock.release()
-        stream.LOCKS.pop(lab.cid, None)
-    _scenario(scenario())
 
 
 # ---- Review Focus 4: three at a time per owner; the fourth waits ----

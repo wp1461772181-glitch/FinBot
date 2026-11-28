@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.agent_workflow import consent, direct
+from app.agent_workflow import consent
 from app.kernel import ask, loop, press
 from test_kernel_loop import act_call, call, ctx, env, fake_consent, remember_args, run, script, step, stub_remember, tool_results  # noqa: F401  (fixtures are used by name)
 from test_kernel_press import cards, pressed, turn  # noqa: F401
@@ -30,13 +30,13 @@ def history(last):
 
 # --- the card -----------------------------------------------------------------------------------------------------------
 
-def test_the_card_has_the_old_engines_shape():
-    old = direct.Turn.card(SimpleNamespace(original=QUESTION), "你想看哪个期间？", OPTIONS)
+def test_the_card_has_the_shape_every_client_reads():
+    """The fields the web page, Telegram and WeChat read off a question card (the old engine's ``Turn.card`` shape, kept after 6b)."""
     new = asked()
-    assert set(new) == set(old) and new["reason"] == old["reason"] == "missing_information"
-    assert new["choices"] == old["choices"] == [{"label": o, "value": "reply:" + o} for o in OPTIONS]
-    assert new["question"] == old["question"] and new["original_question"] == old["original_question"] == QUESTION
-    assert new["id"] != old["id"]
+    assert set(new) == {"id", "reason", "question", "original_question", "expires_at", "choices"} and new["reason"] == "missing_information"
+    assert new["choices"] == [{"label": o, "value": "reply:" + o} for o in OPTIONS]
+    assert new["question"] == "你想看哪个期间？" and new["original_question"] == QUESTION
+    assert new["id"] != asked()["id"]
     expires = datetime.fromisoformat(new["expires_at"])
     assert timedelta(minutes=9) < expires - datetime.now(UTC) <= timedelta(minutes=10)
 

@@ -7,7 +7,7 @@ import asyncio,copy,json,uuid
 import pytest
 from fastapi import HTTPException
 from app.agent_chat_store import owner_hash
-from app.agent_workflow.direct import run_direct_turn
+pass  # (removed import of the old turn)
 from app.agent_workflow.state import AgentRuntimeContext
 from app.agent_workflow.trace import MAX_NODES,TurnTrace
 
@@ -72,56 +72,6 @@ def test_tools_fan_out_from_the_step_that_called_them_and_join_the_next():
     assert ghost['name']=='propose' and ghost['after']==[by_kind['decide']['id']]
     sent=[[e for e in events if e.get('id')==n['id']] for n in nodes]
     assert all(len(seen)==2 for seen in sent)
-
-
-def test_a_research_turn_is_drawn_from_question_to_answer():
-    steps=[{'content':'MSFT FY2026 营业收入为 331,839,000,000 美元 [1]。'}]
-    r,_=run('MSFT 营收',route='A',scope={'symbol':'MSFT','metrics':['营收']},steps=steps,
-        answers={'query_financials':{'ok':True,'data':[ROW]}})
-    trace=r['trace'];sequence=kinds(trace)
-    order=['input','resolve','classify','tool','decide','verify','output']
-    positions=[sequence.index(k) for k in order]
-    assert positions==sorted(positions)
-    assert not any(n['status']=='running' for n in trace)
-    assert trace[-1]['kind']=='output' and trace[-1]['output']['status']=='succeeded'
-
-
-def test_a_card_turn_ends_on_an_ask_node():
-    r,_=run('Micron 最近新闻',route='D',scope={'company':'Micron'},
-        steps=[call('ask_user',question='哪家公司？',options=['Apple','Micron'])])
-    trace=r['trace']
-    assert trace[-1]['kind']=='ask'
-    assert trace[-1]['output']['question']=='哪家公司？'
-    assert not any(n['status']=='running' for n in trace)
-
-
-def test_a_failed_step_is_marked_and_the_trace_still_closes():
-    async def refuse():raise HTTPException(401,'provider_auth_failed')
-    r,_=run('Micron 最近新闻',route='D',scope={'company':'Micron'},decider=refuse)
-    trace=r['trace'];decided=[n for n in trace if n['kind']=='decide'][-1]
-    assert decided['status']=='failed' and decided['output']=={'error':'provider_auth_failed'}
-    assert trace[-1]['kind']=='output' and trace[-1]['output']['status']=='failed'
-    assert not any(n['status']=='running' for n in trace)
-
-
-def test_the_trace_carries_no_key_and_no_card_value():
-    secret='sk-test-PRIVATE-123'
-    r,_=run('查一下 Micron 的新闻，key 是 '+secret,route='B',api_key=secret)
-    trace=r['trace']
-    assert secret not in json.dumps(trace,ensure_ascii=False)
-    assert all(len(json.dumps(n['output'],ensure_ascii=False))<=400 for n in trace if n['output'] is not None)
-    card,_=run('Micron 最近新闻',route='D',scope={'company':'Micron'},
-        steps=[call('ask_user',question='哪家公司？',options=['Apple','Micron'])])
-    value=card['pending_request']['choices'][0]['value']
-    reply,_=run(value,route='B',scope={'answer':'苹果的商业模式包括硬件与服务。'})
-    assert reply['trace'][0]['kind']=='input'
-    assert not reply['trace'][0]['output']['question'].startswith('reply:')
-
-
-def test_turns_without_tools_draw_a_single_answer_step():
-    r,c=run('苹果运营模式',route='B',scope={'answer':'苹果的商业模式包括硬件与服务。'})
-    assert kinds(r['trace'])==['input','resolve','classify','general','output']
-    assert not c
 
 
 def test_the_trace_is_bounded():

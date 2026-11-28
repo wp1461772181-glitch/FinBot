@@ -9,7 +9,7 @@ from pydantic import model_validator, BaseModel, ConfigDict, Field, SecretStr, f
 from .agent_chat_provider import ProviderFailure
 from .agent_chat_api import PROVIDER_PATTERN, REQUEST_SLOTS
 from .agent_tools import tool_schemas
-from .agent_workflow.graph import stream_workflow, mark_terminal_status, kernel_turn
+from .agent_workflow.graph import stream_workflow, mark_terminal_status
 from .agent_workflow.trace import WIRE_KEYS
 from .agent_chat_store import create_conversation,verify_conversation,append_message,move_message,message_texts,owned_message_page,history,finish_conversation,owner_hash
 from .agent_chat_store import conversation_context
@@ -569,12 +569,11 @@ async def stream_chat(payload:StreamRequest,request:Request,x_chat_session:str|N
  if cid:
   if not await verify_conversation(cid,x_chat_session):raise HTTPException(404,"conversation_not_found")
  else:cid=await create_conversation(x_chat_session)
- is_kernel=kernel_turn(bot)
- if is_kernel and not payload.pending_request_id:
+ if not payload.pending_request_id:
   # 3c: the owner speaks while a turn of this conversation is working: it is handed to that turn (no 409).  A card press is not a message.
   running=inboxes.target(cid)
   if running is not None:return await _interject(payload,x_chat_session,bot,chosen,model_label,cid,running)
- return await _start_turn(payload,x_chat_session,bot,chosen,model_label,cid,is_kernel)
+ return await _start_turn(payload,x_chat_session,bot,chosen,model_label,cid)
 def _failed_future_quiet(task):
  if not task.cancelled():task.exception()
 async def _interject(payload,credential,bot,chosen,model_label,cid,target):
@@ -592,7 +591,7 @@ async def _interject(payload,credential,bot,chosen,model_label,cid,target):
  async def launch():
   outcome=await message.future
   if outcome.decision!=inboxes.SEPARATE:return outcome,None
-  return outcome,await _start_turn(payload,credential,bot,chosen,model_label,cid,True,separate=message,reader_gone=not listening["on"])
+  return outcome,await _start_turn(payload,credential,bot,chosen,model_label,cid,separate=message,reader_gone=not listening["on"])
  launcher=asyncio.ensure_future(launch())
  _BACKGROUND.add(launcher);launcher.add_done_callback(_BACKGROUND.discard);launcher.add_done_callback(_failed_future_quiet)
  async def body():
@@ -617,7 +616,7 @@ async def _interject(payload,credential,bot,chosen,model_label,cid,target):
    listening["on"]=False
    if inner is not None:await inner.aclose()
  return StreamingResponse(body(),media_type="text/event-stream",headers={"Cache-Control":"no-store","X-Accel-Buffering":"no"})
-async def _start_turn(payload,x_chat_session,bot,chosen,model_label,cid,is_kernel,*,separate=None,reader_gone=False):
+async def _start_turn(payload,x_chat_session,bot,chosen,model_label,cid,*,separate=None,reader_gone=False):
  """Start one turn and return its response.  ``separate``: the interjected message (``inbox.Message``) this turn answers on its own: its row is
  already stored, it runs beside the turn that was working (no conversation lock), and its history is the conversation as of the message."""
  if payload.pending_request_id:inboxes.MINTED.pop(cid,None)
@@ -625,7 +624,7 @@ async def _start_turn(payload,x_chat_session,bot,chosen,model_label,cid,is_kerne
  if separate is None:
   lock=LOCKS.setdefault(cid,asyncio.Lock())
   if lock.locked():
-   if not is_kernel or payload.pending_request_id:raise HTTPException(409,"conversation_busy")
+   if payload.pending_request_id:raise HTTPException(409,"conversation_busy")
    if inboxes.finishing(cid):
     # A kernel turn that no longer takes messages is storing its answer: this one starts when it has.
     try: await asyncio.wait_for(lock.acquire(),timeout=LOCK_WAIT_SECONDS)
@@ -651,7 +650,7 @@ async def _start_turn(payload,x_chat_session,bot,chosen,model_label,cid,is_kerne
   raise
  turn=separate.turn_id if separate is not None else str(uuid.uuid4())
  user_message_id=separate.id if separate is not None else str(uuid.uuid4())
- box=inboxes.Inbox(turn,own_message_id=user_message_id) if is_kernel else None
+ box=inboxes.Inbox(turn,own_message_id=user_message_id)
  if box is not None:
   async def adopt(taken):
    # A message this turn merged (or was stopped by) belongs to it from now on: its row moves under the turn, so the history reads them as one.
@@ -685,17 +684,11 @@ async def _start_turn(payload,x_chat_session,bot,chosen,model_label,cid,is_kerne
    # the user saw on the button.
    shown=payload.display_message.strip() if payload.pending_request_id and payload.display_message else ""
    if separate is None:
-    if is_kernel:await append_message(cid,turn,"user",shown or payload.message,message_id=user_message_id)
-    else:await append_message(cid,turn,"user",shown or payload.message)
+    await append_message(cid,turn,"user",shown or payload.message,message_id=user_message_id)
    try:
     work_open=True        # set first: a cancel during the insert still ends the row (the finally waits for the insert thread)
-    if is_kernel:
-     starting=asyncio.ensure_future(asyncio.to_thread(work.enter_turn,owner_hash(x_chat_session),cid,turn,shown or payload.message))
-     slot,ahead=await asyncio.shield(starting)
-    else:
-     starting=asyncio.ensure_future(asyncio.to_thread(work.start_turn,owner_hash(x_chat_session),cid,turn,shown or payload.message))
-     await asyncio.shield(starting)
-     slot,ahead=work.RUNNING,0
+    starting=asyncio.ensure_future(asyncio.to_thread(work.enter_turn,owner_hash(x_chat_session),cid,turn,shown or payload.message))
+    slot,ahead=await asyncio.shield(starting)
    except Exception:
     log.exception("recording the work item failed (turn=%s)",turn)
     slot,ahead=work.RUNNING,0
@@ -717,7 +710,7 @@ async def _start_turn(payload,x_chat_session,bot,chosen,model_label,cid,is_kerne
       yield frame("queued",{"ahead":ahead})
      else:yield HEARTBEAT_FRAME
     started=time.monotonic()     # the time limit counts from the start of the work, not from the wait
-   anchored=kernel_turn(bot)      # the history, and the summary made of it, are read the way the kernel reads them
+   anchored=True      # the history, and the summary made of it, are read the way the kernel reads them (every turn is the kernel's since 6b)
    cut={}
    if separate is not None and separate.sequence is not None:cut={"upto_sequence":separate.sequence,"exclude_turns":separate.excluded}
    elif box is not None:
@@ -1021,12 +1014,6 @@ def _window_of_bot(credential:str,bot_id:str|None)->int:
   return catalog.window_for(settings["model"]) if settings else layers.WINDOW_TOKENS
  except Exception:return layers.WINDOW_TOKENS
 
-def _anchored_of_bot(credential:str,bot_id:str|None)->bool:
- """Whether a bot's line is read the kernel's way (the same decision its turns make)."""
- if not bot_id or not _is_owner(credential):return kernel_turn({})
- from . import agent_bots as bots
- try:return kernel_turn(bots.turn_settings(owner_hash(credential),bot_id))
- except Exception:return kernel_turn({})
 
 @router.get("/context")
 async def get_empty_context(bot_id:str|None=Query(default=None),x_chat_session:str|None=Header(default=None)):
@@ -1038,7 +1025,7 @@ async def get_empty_context(bot_id:str|None=Query(default=None),x_chat_session:s
 async def get_conversation_context(conversation_id:str,bot_id:str|None=Query(default=None),x_chat_session:str|None=Header(default=None)):
  if not x_chat_session:raise HTTPException(404,"conversation_not_found")
  window=await asyncio.to_thread(_window_of_bot,x_chat_session,bot_id)
- context=await conversation_context(conversation_id,x_chat_session,window=window,anchored=await asyncio.to_thread(_anchored_of_bot,x_chat_session,bot_id))
+ context=await conversation_context(conversation_id,x_chat_session,window=window,anchored=True)
  if context is None:raise HTTPException(404,"conversation_not_found")
  return _context_report(context,window)
 
@@ -1246,7 +1233,7 @@ async def compact_conversation_endpoint(conversation_id:str,body:CompactBody,x_c
   settings,resolved=await asyncio.to_thread(_bot_turn,_Payload,x_chat_session)
   if settings["conversation_id"]!=conversation_id:raise HTTPException(409,"bot_conversation_mismatch")
  else:settings=None;resolved=await asyncio.to_thread(_catalog_turn,None,x_chat_session)
- return await _compact_now(conversation_id,x_chat_session,resolved,body.focus or "",kernel_turn(settings))
+ return await _compact_now(conversation_id,x_chat_session,resolved,body.focus or "",True)
 
 @router.post("/bots/{bot_id}/compact")
 async def compact_bot_line_endpoint(bot_id:str,body:CompactBody,x_chat_session:str|None=Header(default=None)):
@@ -1255,7 +1242,7 @@ async def compact_bot_line_endpoint(bot_id:str,body:CompactBody,x_chat_session:s
  class _Payload:conversation_id=None
  _Payload.bot_id=bot_id
  settings,resolved=await asyncio.to_thread(_bot_turn,_Payload,x_chat_session)
- return await _compact_now(settings["conversation_id"],x_chat_session,resolved,body.focus or "",kernel_turn(settings))
+ return await _compact_now(settings["conversation_id"],x_chat_session,resolved,body.focus or "",True)
 
 
 class ResearchQueueBody(BaseModel):

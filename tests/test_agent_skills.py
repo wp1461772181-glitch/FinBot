@@ -43,9 +43,9 @@ def owner(monkeypatch, disposable_database):
             db.query(model).delete()
         db.commit()
     skills.seed_builtins()
-    from app.agent_workflow import consent, direct, tools
+    from app.agent_workflow import consent, tools
     import app.agent_chat_identity as identity
-    for module in (consent, direct, tools, identity):
+    for module in (consent, tools, identity):
         monkeypatch.setattr(module, "owner_credential_matches", lambda c: c == OWNER)
     return OWNER
 
@@ -58,7 +58,7 @@ def _skill(name="读现金流", tools=("query_financials",), **fields):
 
 def _turn(*, bot_id=None, decider=None, recognizer=None, question="q", active_skill=None, unattended=False,
           executor=None):
-    from app.agent_workflow import direct
+    pass  # (removed import of the old turn)
     from app.agent_workflow.state import AgentRuntimeContext
     settings = bots.turn_settings(OWNER_HASH, bot_id) if bot_id else {}
     context = AgentRuntimeContext("custom", "m", "k", owner_hash=OWNER_HASH, identity_credential=OWNER,
@@ -112,68 +112,6 @@ def test_a_skill_with_an_unknown_or_overreaching_tool_or_code_is_not_saved(owner
 
 
 # --- the prompt ---------------------------------------------------------------------------------------
-
-def test_twenty_enabled_skills_take_under_1_kb_and_the_steps_come_only_with_use_skill(owner):
-    for index in range(17):
-        _skill(name=f"很长名字的技能第{index}号", description="这是一个描述写得非常非常长的技能，用来测试列表会不会超过一千字节的上限" * 2,
-               body=f"秘密步骤 {index}：先读这个再读那个。")
-    enabled = [s for s in skills.list_skills(OWNER_HASH) if s["enabled"]]
-    assert len(enabled) == 20
-    block = skills.catalogue_block(OWNER_HASH)
-    assert len(block.encode()) < 1024
-    assert all(s["name"] in block for s in enabled)
-    direct, turn, context, quiet = _turn()
-    prompt = json.dumps(turn.tool_messages(), ensure_ascii=False)
-    assert "很长名字的技能第3号" in prompt and "秘密步骤 3" not in prompt
-    outcome = asyncio.run(turn.use_skill({"name": "很长名字的技能第3号"}))
-    assert outcome["ok"] and "秘密步骤 3" in outcome["data"][0]["steps"]
-    assert "秘密步骤 3" in json.dumps(turn.tool_messages(), ensure_ascii=False)
-    # A disabled skill is neither listed nor usable.
-    third = next(s for s in enabled if s["name"] == "很长名字的技能第4号")
-    skills.set_enabled(OWNER_HASH, third["id"], False)
-    assert "很长名字的技能第4号" not in skills.catalogue_block(OWNER_HASH)
-    assert asyncio.run(turn.use_skill({"name": "很长名字的技能第4号"}))["error_code"] == "skill_not_found"
-
-
-def test_tools_are_this_turns_and_the_bots_and_the_skills(owner):
-    bot = bots.create_bot(OWNER_HASH, {"name": "读财报", "tool_scope": ["query_financials", "query_sec_filings", "web_research"]})
-    skill = _skill(tools=["query_financials", "query_stock_prices"])
-    direct, turn, context, quiet = _turn(bot_id=bot["id"])
-    before = _names(turn)
-    assert {"query_financials", "query_sec_filings", "web_research"} <= before and "query_stock_prices" not in before
-    asyncio.run(turn.use_skill({"name": skill["name"]}))
-    after = _names(turn)
-    # The skill keeps query_financials; query_stock_prices is outside the bot's scope; the rest is gone.
-    assert "query_financials" in after and "query_stock_prices" not in after
-    assert "query_sec_filings" not in after and "web_research" not in after
-    assert {"ask_user", "calculate", "read_history_citation"} <= after  # the basics stay
-    assert after <= before
-
-
-def test_a_write_a_skill_allows_still_needs_the_owners_words_and_a_card(owner):
-    skill = _skill(name="扩研究队列", tools=["query_research_queue", "add_to_research_queue"])
-    executed = []
-
-    def executor(name, args):
-        executed.append(name)
-        return {"ok": True, "data": []}
-    active = skills.active(OWNER_HASH, name=skill["name"])
-    # Without the owner's words the write is not even offered: calling it is refused, never converted.
-    steps = iter([{"tool_calls": [{"id": "w1", "function": {"name": "add_to_research_queue", "arguments": json.dumps({"symbol": "AMD"})}}]},
-                  {"content": "没有执行。"}])
-    direct, turn, context, quiet = _turn(active_skill=active, decider=lambda *_: next(steps), executor=executor,
-                                         recognizer=lambda _p: {"category": "D", "days_back": None, "requested_actions": []})
-    assert "add_to_research_queue" not in _names(turn)
-    result = asyncio.run(direct.run_direct_turn("看看研究队列", context, emit=quiet))
-    assert executed == [] and result.get("pending_request") is None
-    # With them, it is a confirmation card, still not executed.
-    steps = iter([{"tool_calls": [{"id": "w2", "function": {"name": "add_to_research_queue", "arguments": json.dumps({"symbol": "AMD"})}}]},
-                  {"content": "请确认。"}])
-    direct, turn, context, quiet = _turn(active_skill=active, decider=lambda *_: next(steps), executor=executor,
-                                         recognizer=lambda _p: {"category": "D", "days_back": None, "requested_actions": ["add_to_research_queue"]})
-    result = asyncio.run(direct.run_direct_turn("把 AMD 加入研究队列", context, emit=quiet))
-    assert executed == [] and result["pending_request"]["reason"] == "write_confirmation"
-
 
 # --- starting a skill ------------------------------------------------------------------------------------
 
@@ -239,17 +177,7 @@ FIELDS = {"name": "查苹果现金流", "description": "读苹果的现金流。
           "allowed_tools": ["query_financials"]}
 
 
-def _skill_card(question):
-    """The card save_skill makes: no wording of the request is checked (the classifier grants the tool, the card guards)."""
-    direct, turn, context, quiet = _turn(question=question)
-    turn.granted_actions = {"save_skill"}
-    outcome = asyncio.run(turn.propose("save_skill", dict(FIELDS)))
-    assert outcome["data"][0]["status"] == "awaiting_confirmation", outcome
-    asyncio.run(turn.confirm_proposals())
-    return direct, turn.pending, context.conversation_id
-
-
-def _press(direct, card, conversation, value):
+def _press(card, conversation, value):
     from app.agent_workflow.state import AgentRuntimeContext
     context = AgentRuntimeContext("custom", "m", "k", owner_hash=OWNER_HASH, identity_credential=OWNER, conversation_id=conversation)
 
@@ -257,43 +185,6 @@ def _press(direct, card, conversation, value):
         pass
     state = {"pending_request": card, "requested_pending_id": card["id"]}
     return asyncio.run(direct.Turn(value, context, emit, [], state).consent_reply())
-
-
-@pytest.mark.parametrize("question", ["帮我把这个 skill 新增一下", "写一个异动归因的 skill", "存成技能"])
-def test_any_wording_makes_a_card_and_enable_makes_the_skill_usable(owner, question):
-    direct, card, conversation = _skill_card(question)
-    assert [c["label"] for c in card["choices"]] == ["保存并启用", "存为草稿", "取消"]
-    assert skills.active(OWNER_HASH, name="查苹果现金流") is None, "nothing is saved before a press"
-    _press(direct, card, conversation, card["choices"][0]["value"])
-    saved = next(s for s in skills.list_skills(OWNER_HASH) if s["name"] == "查苹果现金流")
-    assert saved["status"] == "active" and saved["enabled"] is True
-    assert skills.active(OWNER_HASH, name="查苹果现金流") is not None
-    assert skills.slash(OWNER_HASH, "/查苹果现金流 x")[0] is not None
-
-
-def test_save_as_draft_is_not_in_the_usable_list_and_a_press_runs_once(owner):
-    direct, card, conversation = _skill_card("存成技能")
-    draft_value = card["choices"][1]["value"]
-    assert draft_value.endswith(":draft")
-    _press(direct, card, conversation, draft_value)
-    draft = next(s for s in skills.list_skills(OWNER_HASH) if s["name"] == "查苹果现金流")
-    assert draft["status"] == "draft" and draft["enabled"] is False
-    assert "查苹果现金流" not in skills.catalogue_block(OWNER_HASH) and skills.active(OWNER_HASH, name="查苹果现金流") is None
-    assert skills.slash(OWNER_HASH, "/查苹果现金流 x")[0] is None
-    # The card is used up: pressing the other button adds nothing.
-    _press(direct, card, conversation, card["choices"][0]["value"])
-    assert len([s for s in skills.list_skills(OWNER_HASH) if s["name"].startswith("查苹果现金流")]) == 1
-    # The owner can still save the draft in the editor.
-    saved = skills.update_skill(OWNER_HASH, draft["id"], {"save_draft": True, "body": "1. 读现金流并标来源。"})
-    assert saved["status"] == "active" and saved["enabled"] and "查苹果现金流" in skills.catalogue_block(OWNER_HASH)
-
-
-def test_save_skill_is_refused_unattended_and_when_not_granted(owner):
-    direct, turn, context, quiet = _turn(question="存成技能", unattended=True)
-    turn.granted_actions = {"save_skill"}
-    assert asyncio.run(turn.propose("save_skill", dict(FIELDS)))["error_code"] == "unattended_read_only"
-    direct, turn, context, quiet = _turn(question="苹果现金流多少")
-    assert asyncio.run(turn.propose("save_skill", dict(FIELDS)))["error_code"] == "write_tool_not_granted"
 
 
 def test_markdown_export_and_import_show_the_tools_and_refuse_code(owner):

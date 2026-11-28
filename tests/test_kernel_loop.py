@@ -831,7 +831,7 @@ def test_a_failure_after_the_write_still_reports_done(env, fake_consent):
     def boom(value, operations=None):
         raise RuntimeError("facts")
 
-    env.monkeypatch.setattr(act.direct, "execution_facts", boom)
+    env.monkeypatch.setattr(act.texts, "execution_facts", boom)
     fake = script(env, [step(calls=[act_call("c1", "add_to_research_queue", {"symbol": "NVDA"})]), step(text="好")])
     result, _ = run(context=ctx())
     (row,) = tool_results(fake)

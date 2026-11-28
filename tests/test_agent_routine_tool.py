@@ -37,9 +37,9 @@ def owner(monkeypatch, disposable_database):
     with SessionLocal() as db:
         db.query(AgentTask).delete()
         db.commit()
-    from app.agent_workflow import direct, tools
+    from app.agent_workflow import tools
     import app.agent_chat_identity as identity
-    for module in (consent, direct, tools, identity):
+    for module in (consent, tools, identity):
         monkeypatch.setattr(module, "owner_credential_matches", lambda c: c == OWNER)
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     return OWNER
@@ -69,7 +69,7 @@ async def _quiet(_event):
 
 
 def _turn(question, context, **kwargs):
-    from app.agent_workflow import direct
+    pass  # (removed import of the old turn)
     return asyncio.run(direct.run_direct_turn(question, context, emit=_quiet, **kwargs))
 
 
@@ -119,28 +119,3 @@ def test_the_owners_words_grant_it_and_a_plain_question_does_not():
     assert not authorized("create_routine", "不要定时推送")
 
 
-def test_hourly_news_card_then_press_creates_the_task_on_this_bot(owner):
-    bot = ensure_default_bot(OWNER_HASH)
-    # The classifier missed the ask: the owner's own words still grant the tool (the card is the guard).
-    context = _context("conv-finbot", intent_recognizer=_route(), decider=_proposing(), bot_id=str(bot.id))
-    first = _turn(WORDS, context)
-    card = first["pending_request"]
-    assert card and card["display"]["title"] == "新建例行任务 · 每小时新闻", first["answer"]
-    assert card["display"]["targets"] == [{"kind": "每小时第 05 分"}]
-    assert tasks.list_tasks(OWNER_HASH) == []  # nothing is written before the press
-
-    _press(card, _context("conv-finbot", decider=lambda *_: {"content": "已创建。"}, bot_id=str(bot.id)))
-    [task] = tasks.list_tasks(OWNER_HASH)
-    assert (task["name"], task["kind"], task["schedule_kind"], task["schedule_time"]) == ("每小时新闻", "brief", "hourly", "00:05")
-    assert task["instruction"] == ROUTINE["instruction"] and task["scope"] == "research_queue"
-    assert task["bot_id"] == str(bot.id)
-
-
-def test_a_guest_never_gets_a_card(owner):
-    from app.agent_workflow.state import AgentRuntimeContext
-    context = AgentRuntimeContext("custom", "test", "dummy", identity_credential="guest", owner_hash=owner_hash("guest"),
-                                  conversation_id="conv-guest", resolver=_new, intent_recognizer=_route("create_routine"),
-                                  decider=_proposing())
-    result = _turn(WORDS, context)
-    assert not result.get("pending_request")
-    assert tasks.list_tasks(owner_hash("guest")) == []

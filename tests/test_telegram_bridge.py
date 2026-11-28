@@ -30,7 +30,7 @@ def run(coroutine):
 def owner(monkeypatch, disposable_database):
     from app.agent_workflow.models import AgentConsent
     from app.agent_chat_models import AgentTelegramBind
-    from app.agent_workflow import direct, tools
+    from app.agent_workflow import tools
     import app.agent_chat_identity as identity
 
     skipped = {"material_analysis_jobs", "material_analysis_versions", "material_analysis_job_model_configs",
@@ -42,7 +42,7 @@ def owner(monkeypatch, disposable_database):
         db.query(AgentConsent).delete()
         db.query(AgentTelegramBind).delete()
         db.commit()
-    for module in (consent, direct, tools, identity):
+    for module in (consent, tools, identity):
         monkeypatch.setattr(module, "owner_credential_matches", lambda c: c == OWNER)
     return owner_hash(OWNER)
 

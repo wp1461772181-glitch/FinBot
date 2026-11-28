@@ -1,6 +1,6 @@
 """Behaviours the first production smoke of the fluent agent got wrong (2026-10-19, RAG on)."""
 import asyncio,json,time
-from app.agent_workflow import direct
+pass  # (removed import of the old turn)
 from app.agent_workflow.evidence import reviewed_answer,unsupported_number_values
 from app.agent_workflow.state import AgentRuntimeContext
 
@@ -48,11 +48,6 @@ def test_a_list_item_keeps_its_sentences_that_passed():
 def _turn(question='AMD 收盘价',**context):
     return direct.Turn(question,AgentRuntimeContext('custom','test','dummy',**context),emit,[],{})
 
-def test_tool_call_markup_never_reaches_the_answer():
-    turn=_turn();turn.route='A';turn.citations=[{'ordinal':1,'quote':'100','source_type':'saved_price'}]
-    result=turn.finish('AMD 收盘价为 100 美元 [1]。\n\n'+MARKUP)
-    assert 'DSML' not in result['answer'] and result['answer']=='AMD 收盘价为 100 美元 [1]。'
-
 def _capped(answers,closings):
     def decide(messages,tools):
         turn.started=time.monotonic()-100
@@ -62,69 +57,6 @@ def _capped(answers,closings):
     turn=_turn(classifier=lambda _:'D',decider=decide,answerer=answer,
                executor=lambda *_:{'ok':True,'data':[{'id':'p','symbol':'AMD','close':100}]})
     return turn
-
-def test_a_closing_that_only_calls_a_tool_is_asked_once_more():
-    closings=[]
-    turn=_capped([MARKUP,'AMD 已保存收盘价 100 美元 [1]。'],closings)
-    result=asyncio.run(turn.run())
-    assert len(closings)==2 and closings[1][-1]['content']==direct.CLOSING_RETRY_NOTE
-    assert result['answer'].startswith('AMD 已保存收盘价 100 美元 [1]') and 'DSML' not in result['answer']
-
-def test_a_turn_that_stops_finding_new_evidence_answers_from_what_it_has():
-    calls=[]
-    def decide(messages,tools):
-        calls.append(1)
-        return {'tool_calls':[{'id':str(len(calls)),'function':{'name':'query_stock_prices','arguments':json.dumps({'symbol':'AMD','limit':len(calls)})}}]}
-    turn=_turn(classifier=lambda _:'D',decider=decide,answerer=lambda messages:'AMD 已保存收盘价 100 美元 [1]。',
-               executor=lambda *_:{'ok':True,'data':[{'id':'p','symbol':'AMD','close':100}]})
-    result=asyncio.run(turn.run())
-    assert result['audit']['stop_reason']=='no_progress' and result['status']=='succeeded'
-    assert result['answer']=='AMD 已保存收盘价 100 美元 [1]。'
-
-def test_a_closing_the_check_rejects_lists_the_sources_by_name():
-    closings=[]
-    turn=_capped(['AMD 收盘价为 999 美元 [1]。']*2,closings)
-    result=asyncio.run(turn.run())
-    assert '已取得可核验来源' not in result['answer'] and '请拆成单独的一条再发' not in result['answer']
-    assert '999' in result['answer'] and result['unverified_lines']==[]
-
-def test_a_repair_that_calls_a_tool_is_asked_once_more_without_tools():
-    seen=[];replies=iter([{'tool_calls':[{'id':'x','function':{'name':'calculate','arguments':'{}'}}]},{'content':'AMD 收盘价为 100 美元 [1]。'}])
-    def decide(messages,tools):seen.append(messages);return next(replies)
-    turn=_turn(decider=decide);turn.route='A'
-    turn.citations=[{'ordinal':1,'quote':'100','source_type':'saved_price'}];turn.observations=[{'name':'query_stock_prices','accepted_evidence':True}]
-    result=asyncio.run(turn.finish_answer('AMD 收盘价为 100 美元。'))
-    # S0: no repair round, so the retry note is never sent and the draft is returned as written.
-    assert result['status']=='succeeded' and result['answer']=='AMD 收盘价为 100 美元。'
-    assert seen==[]
-
-def test_the_audit_lists_the_lines_still_unverified_in_the_answer_it_returns():
-    draft='AMD 收盘价为 100 美元 [1]。\nAMD 开盘价为 999 美元 [1]。'
-    turn=_turn(decider=lambda messages,tools:{'content':draft});turn.route='A'
-    turn.citations=[{'ordinal':1,'quote':'100','source_type':'saved_price'}];turn.observations=[{'name':'query_stock_prices','accepted_evidence':True}]
-    result=asyncio.run(turn.finish_answer(draft))
-    assert result['answer'].startswith(draft)
-    legacy=result['audit']['legacy_review']
-    assert legacy['rejected_lines']==[{'line':'AMD 开盘价为 999 美元 [1]。','reason':'unsupported_numeric_claim'}]
-    assert [x['line'] for x in legacy['unverified_lines']]==['AMD 开盘价为 999 美元 [1]。']
-    assert result['unverified_lines']==[]
-
-def test_a_position_mismatch_names_the_positions_the_users_words_point_to():
-    turn=_turn('详细解释一下第二条。')
-    turn.sets=[{'id':'s1','tool':'web_research','scope':{},'rows':[{'title':'A','url':'https://a'},{'title':'B','url':'https://b'}]}]
-    out=asyncio.run(turn.previous_results({'result_set_id':'s1','positions':[1],'action':'summarize'}))
-    assert out['error_code']=='result_position_mismatch' and out['expected_positions']==[2]
-
-def test_selecting_from_this_turns_own_results_says_they_are_already_evidence():
-    turn=_turn('列出微软的申报')
-    saved={'id':'s1','tool':'query_sec_filings','scope':{},'rows':[{'id':'f1','title':'10-K'},{'id':'f2','title':'8-K'}]}
-    turn.sets=[saved];turn.new_sets=[saved];before=turn.repeated_evidence
-    out=asyncio.run(turn.previous_results({'result_set_id':'s1','positions':[1,2],'action':'summarize'}))
-    assert out['ok'] and out['data'][0]['status']=='already_in_evidence' and turn.repeated_evidence==before and not turn.citations
-
-def test_the_closing_instruction_asks_for_an_answer_not_a_progress_report():
-    text=_turn().tool_messages(True)[0]['content']
-    assert '明确列出已完成和未完成的部分' not in text and '不要写出任何工具调用' in text
 
 def test_a_date_written_with_spaces_is_a_date_not_three_figures():
     filing=[{'ordinal':1,'source_type':'official_filing','quote':'Quarterly report 10-Q','title':'MSFT 10-Q'}]

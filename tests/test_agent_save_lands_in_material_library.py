@@ -6,11 +6,11 @@ document, so Levi's 「存进资料库」 never showed in 资料库 › 材料�
 """
 import uuid
 from datetime import UTC, datetime
-
+from app.agent_workflow import write_text
 import pytest
 from sqlalchemy import func, select
 
-from app.agent_workflow import consent, direct, tools
+from app.agent_workflow import consent, tools
 from app.agent_workflow.models import AgentWebSource
 from app.agent_workflow.state import AgentRuntimeContext
 from app.agent_workflow.web_sources import freeze_snapshot, save_snapshot
@@ -131,25 +131,13 @@ def test_knowledge_only_keeps_the_page_out_of_the_library(owner):
     assert result['destination'] == 'knowledge_only' and 'uploaded_evidence_id' not in result
 
 
-def test_a_save_without_a_stock_asks_which_library_first(monkeypatch):
-    async def emit(_):
-        pass
-    turn = direct.Turn('把这篇存进资料库', _runtime(watchlist=('NVDA', 'MSFT')), emit, [], {})
-    turn.owner = True
-    turn.scope = {}
-    assert turn.library_symbol({'url': 'https://example.org/x'}) is None
-    outcome = turn.library_symbol_required()
-    assert outcome['ok'] is False and outcome['error_code'] == 'library_symbol_required'
-    assert outcome['candidates'] == ['NVDA', 'MSFT'] and '哪只股票' in outcome['question']
-
-
 def test_the_report_links_to_the_library_row(monkeypatch):
     monkeypatch.setenv('FINBOT_WEB_URL', 'https://finbot.example/')
     value = {'ok': True, 'data': [{'ok': True, 'outcome': {'ok': True, 'symbol': 'AAPL',
              'material_link': '#materials?symbol=AAPL&focus=abc'}}]}
-    note = direct.library_note(value)
+    note = write_text.library_note(value)
     assert note.strip() == '在资料库查看：[资料库 · AAPL](https://finbot.example/#materials?symbol=AAPL&focus=abc)'
-    assert direct.library_note({'ok': True, 'data': [{'ok': True}]}) == ''
+    assert write_text.library_note({'ok': True, 'data': [{'ok': True}]}) == ''
 
 
 def test_the_backfill_dry_run_writes_nothing_and_apply_files_once(owner):

@@ -21,7 +21,7 @@ import pytest
 from app.agent_system_prompt import SELF_STATE_SENTENCE
 from app.agent_workflow import claim_public_wire as wire
 from app.agent_workflow import claim_shadow
-from app.agent_workflow import direct
+pass  # (removed import of the old turn)
 from app.agent_workflow import tools
 from app.agent_workflow.state import AgentRuntimeContext
 from test_agent_chat_stream import stream_fixture  # noqa: F401  (the endpoint fixture for the K11 label tests)
@@ -98,39 +98,6 @@ def test_maybe_schedule_busy_and_scheduled(monkeypatch):
 
 # ---- K9 / B5 / P-R6 SELF_MODEL & SELF_NO_BOT: the fact block itself ----------------------------------------------------
 
-def test_fact_block_has_model_no_bot_and_the_shown_list_capped_at_five(monkeypatch):
-    sentences = [f"句子{i}" + "甲" * 80 for i in range(7)]
-    text, audit = direct.self_state_block(_context(self_state=_state(prior={"state": "shown", "sentences": sentences}, )))
-    lines = text.split("\n")
-    assert lines[0] == direct.SELF_STATE_HEAD
-    assert lines[1] == "- 当前回答模型：haiku-5.5（openrouter/anthropic/claude-haiku-5-5）"
-    assert direct.SELF_NO_BOT in lines
-    shown = [l for l in lines if "公开显示了" in l][0]
-    assert shown.endswith("；等 7 处。")
-    assert shown.count("；") == 5                                # five listed, then the count
-    assert shown.count("甲") <= 5 * 60
-    assert audit["prior_state"] == "shown" and audit["prior_shown"] == 7
-    assert direct.SELF_PRIOR_NOTE in lines
-
-
-def test_bot_turn_has_no_no_bot_line():
-    text, _ = direct.self_state_block(_context(bot_id="b1", self_state=_state()))
-    assert direct.SELF_NO_BOT not in text and "- 当前回答模型：" in text
-
-
-def test_pending_wording_is_the_accepted_text_and_rounds_up_to_one_second():
-    text, audit = direct.self_state_block(_context(self_state=_state(prior={"state": "pending", "elapsed_s": 0.2})))
-    assert K9_PENDING.format(s=1) in text.split("\n")
-    assert audit["prior_state"] == "pending"
-
-
-def test_fact_block_never_carries_a_judge_field():
-    sentences = ["Northwind 第三季度营收下降 8%"]
-    text, _ = direct.self_state_block(_context(self_state=_state(prior={"state": "shown", "sentences": sentences})))
-    for word in ("verdict", "not_in_source", "reason", "contradiction", "judge"):
-        assert word not in text
-
-
 # ---- P-R1 at the level of the states: prior_answer_state decides, the block says ----------------------------------------
 
 @pytest.mark.parametrize("name,audit,marks,settled,paused,elapsed,expected", [
@@ -203,63 +170,6 @@ def test_tail_only_and_bad_lines_are_unknown_not_errors(tmp_path, monkeypatch):
 
 
 # ---- The turn: the fact block reaches the model, once per turn, and the audit records what it said --------------------
-
-def _run_turn(monkeypatch, *, self_state, bot_id=None):
-    from app.agent_workflow.direct import run_direct_turn
-    from test_sw1b_closing_complete import text
-    seen = []
-    monkeypatch.setattr(direct, "owner_credential_matches", lambda c: c == OWNER)
-
-    def decide(messages, offered):
-        seen.append(messages)
-        return text("这是一个没有编号的回答。")
-
-    async def emit(_event):
-        pass
-    ctx = AgentRuntimeContext("custom", "test", "dummy", identity_credential=OWNER, classifier=lambda _: {
-        "category": "A", "mode": "rag", "symbol": None, "symbols": [], "days_back": None}, decider=decide,
-        self_state=self_state, bot_id=bot_id)
-    result = asyncio.run(run_direct_turn("你用的哪个模型？", ctx, emit=emit))
-    return result, seen[0]
-
-
-def _block_lines(messages):
-    for m in messages:
-        if isinstance(m, dict) and m.get("role") == "system" and str(m.get("content") or "").startswith(direct.SELF_STATE_HEAD):
-            return str(m["content"]).split("\n")
-    return None
-
-
-@pytest.mark.parametrize("prior,line", [
-    ({"state": "none"}, "- 上一条回答的系统来源核对：已完成，没有显示任何标注。"),
-    ({"state": "shown", "sentences": ["甲"]}, "- 上一条回答的系统来源核对：已完成，公开显示了 1 处标注，分别在：甲。"),
-    ({"state": "pending", "elapsed_s": 12.4}, K9_PENDING.format(s=12)),
-    ({"state": "paused"}, "- 上一条回答的系统来源核对：标注展示目前暂停，看不到结果。"),
-    ({"state": "not_checked", "reason": "no_numbered_sources"}, "- 上一条回答的系统来源核对：这条没有做（上一条没有带编号的来源）。"),
-    ({"state": "unknown"}, "- 上一条回答的系统来源核对：查不到这条的结果。"),
-])
-def test_each_state_line_reaches_the_model_verbatim(monkeypatch, disposable_database, prior, line):
-    state = _state(prior={**prior, "turn_id": TURN}, prior_elapsed_s=prior.get("elapsed_s", 0.0))
-    result, messages = _run_turn(monkeypatch, self_state=state)
-    lines = _block_lines(messages)
-    assert lines is not None and line in lines
-    assert lines[1] == "- 当前回答模型：haiku-5.5（openrouter/anthropic/claude-haiku-5-5）"
-    assert result["audit"]["self_state"]["prior_state"] == prior["state"]
-
-
-def test_switch_off_sends_no_block_and_writes_no_audit(monkeypatch, disposable_database):
-    monkeypatch.setenv("FINBOT_SW2_SELF_STATE", "off")
-    result, messages = _run_turn(monkeypatch, self_state=_state(prior={"state": "none", "turn_id": TURN}))
-    assert _block_lines(messages) is None
-    assert "self_state" not in result["audit"]
-
-
-def test_model_line_is_the_only_line_when_there_is_no_previous_answer(monkeypatch, disposable_database):
-    result, messages = _run_turn(monkeypatch, self_state=_state(prior=None))
-    lines = _block_lines(messages)
-    assert lines == [direct.SELF_STATE_HEAD, "- 当前回答模型：haiku-5.5（openrouter/anthropic/claude-haiku-5-5）", direct.SELF_NO_BOT]
-    assert result["audit"]["self_state"] == {"model_label": "haiku-5.5（openrouter/anthropic/claude-haiku-5-5）"}
-
 
 # ---- B1: the shadow task's terminal writes: one line each, judged after the gate returns, owner refusal writes none --
 
@@ -380,28 +290,6 @@ def _run_stream_and_capture_labels(monkeypatch, stream_fixture, payload):
     return labels, [a.get("self_state", {}).get("model_label") for a in audits]
 
 
-@pytest.mark.parametrize("catalog_model,expected", [
-    ("deepseek-flash", "deepseek-flash（siliconflow/deepseek-ai/DeepSeek-V4-Flash）"),
-    ("", "haiku-5.5（openrouter/anthropic/claude-haiku-5-5）"),
-])
-def test_endpoint_labels_a_catalog_turn_with_the_entry_it_resolved_to(monkeypatch, stream_fixture, catalog_model, expected):
-    import app.agent_chat_stream as stream
-    entries = {DEFAULT_ENTRY["name"]: DEFAULT_ENTRY, FLASH_ENTRY["name"]: FLASH_ENTRY}
-    monkeypatch.setattr(stream, "_catalog_turn", lambda name, _credential: {**entries[name or DEFAULT_ENTRY["name"]], "api_key": "k" * 16})
-    payload = stream.StreamRequest(message="你用的哪个模型？", catalog_model=catalog_model)
-    labels, stored = _run_stream_and_capture_labels(monkeypatch, stream_fixture, payload)
-    assert labels == [expected]
-    assert stored == [expected]
-
-
-def test_endpoint_labels_a_browser_sent_model_as_given(monkeypatch, stream_fixture):
-    import app.agent_chat_stream as stream
-    payload = stream.StreamRequest(provider="deepseek", model="deepseek-chat", api_key="abcdefgh", message="你用的哪个模型？")
-    labels, stored = _run_stream_and_capture_labels(monkeypatch, stream_fixture, payload)
-    assert labels == ["deepseek/deepseek-chat"]
-    assert stored == ["deepseek/deepseek-chat"]
-
-
 # ---- P-N (fix M2, spec-sw2 §4): one ordinary single-company question, the four switches on against off -----------------
 
 PN_QUESTION = "MSFT 最近一期年报的营业收入是多少？"
@@ -412,41 +300,8 @@ FOUR_SWITCHES = ("FINBOT_SW2_HISTORY_PAGES", "FINBOT_SW2_MEMORY_PRELOAD", "FINBO
 MEMORY_TOOLS = {"recall_conversations", "read_past_conversation"}
 
 
-def _pn_turn(monkeypatch, *, on):
-    """One owner turn, no previous answer, a scripted decider; every request's messages and offered tool names are kept."""
-    from test_sw1b_closing_complete import text
-    for name in FOUR_SWITCHES:
-        if on:
-            monkeypatch.delenv(name, raising=False)
-        else:
-            monkeypatch.setenv(name, "off")
-    monkeypatch.setattr(direct, "owner_credential_matches", lambda c: c == OWNER)
-    monkeypatch.setattr(tools, "owner_credential_matches", lambda c: c == OWNER)
-    requests = []
-
-    def decide(messages, offered):
-        requests.append({"messages": copy.deepcopy(list(messages)), "tools": {t["function"]["name"] for t in offered}})
-        return text(PN_ANSWER)
-
-    def execute(name, args):
-        return {"ok": True, "data": [copy.deepcopy(PN_ROW)] if name == "query_financials" else []}
-
-    async def emit(_event):
-        pass
-    ctx = AgentRuntimeContext("custom", "test", "dummy", identity_credential=OWNER, decider=decide, executor=execute,
-        classifier=lambda _: {"category": "A", "mode": "rag", "symbol": "MSFT", "symbols": [], "metrics": ["营业收入"], "days_back": None},
-        self_state=_state(prior=None))
-    result = asyncio.run(direct.run_direct_turn(PN_QUESTION, ctx, emit=emit))
-    return result, requests
-
-
 def _is_evidence(message):
     return isinstance(message, dict) and str(message.get("content") or "").startswith("Accepted evidence")
-
-
-def _drop_fact_block(messages):
-    return [m for m in messages if not (isinstance(m, dict) and m.get("role") == "system"
-                                        and str(m.get("content") or "").startswith(direct.SELF_STATE_HEAD))]
 
 
 def _strip_sentence(messages):
@@ -466,27 +321,3 @@ def _ids_masked(messages):
     return [{**m, "content": HEX_ID.sub("<id>", str(m["content"]))} if isinstance(m, dict) and "content" in m else m for m in messages]
 
 
-def test_pn_on_and_off_differ_only_by_the_fact_block_the_sentence_and_the_memory_tools(monkeypatch, disposable_database):
-    on_result, on_requests = _pn_turn(monkeypatch, on=True)
-    off_result, off_requests = _pn_turn(monkeypatch, on=False)
-    assert on_requests and len(on_requests) == len(off_requests)
-    # The two runs really differ in the switches: on carries the audit key, off does not.
-    assert on_result["audit"]["self_state"] == {"model_label": "haiku-5.5（openrouter/anthropic/claude-haiku-5-5）"}
-    assert "self_state" not in off_result["audit"]
-    # (i) the answer, the citations and the evidence area are the same, item by item.
-    assert on_result["status"] == off_result["status"] == "succeeded"
-    assert on_result["answer"] == off_result["answer"] == PN_ANSWER
-    assert on_result["citations"] and on_result["citations"] == off_result["citations"]
-    on_evidence = [m for r in on_requests for m in r["messages"] if _is_evidence(m)]
-    assert on_evidence and on_evidence == [m for r in off_requests for m in r["messages"] if _is_evidence(m)]
-    for on_req, off_req in zip(on_requests, off_requests):
-        # (ii) on, without the fact block and without the one sentence, is off, message for message.
-        assert sum(SELF_STATE_SENTENCE in str(m.get("content") or "") for m in on_req["messages"]) == 1
-        assert not any(SELF_STATE_SENTENCE in str(m.get("content") or "") for m in off_req["messages"])
-        assert _ids_masked(_strip_sentence(_drop_fact_block(on_req["messages"]))) == _ids_masked(off_req["messages"])
-        # (iii) on offers exactly the two memory tools more than off.
-        assert on_req["tools"] == off_req["tools"] | MEMORY_TOOLS
-        assert not (MEMORY_TOOLS & off_req["tools"])
-    assert _block_lines(on_requests[0]["messages"]) == [
-        direct.SELF_STATE_HEAD, "- 当前回答模型：haiku-5.5（openrouter/anthropic/claude-haiku-5-5）", direct.SELF_NO_BOT]
-    assert _block_lines(off_requests[0]["messages"]) is None
