@@ -40,6 +40,11 @@ class Store:
                          "accession TEXT PRIMARY KEY, symbol TEXT NOT NULL, cik TEXT NOT NULL, held INTEGER NOT NULL,"
                          "filed TEXT NOT NULL, accepted_at REAL NOT NULL, primary_doc TEXT, url TEXT,"
                          "detected_at REAL NOT NULL, seeded INTEGER NOT NULL DEFAULT 0, delivered_at REAL, fallback_at REAL)")
+            # 11-28: every other new filing of a holding or a queued company (not only earnings) is told (filings.parse_new_filings).
+            conn.execute("CREATE TABLE IF NOT EXISTS filings_seen ("
+                         "accession TEXT PRIMARY KEY, symbol TEXT NOT NULL, cik TEXT NOT NULL, form TEXT NOT NULL, items TEXT,"
+                         "filed TEXT NOT NULL, accepted_at REAL NOT NULL, url TEXT, detected_at REAL NOT NULL,"
+                         "seeded INTEGER NOT NULL DEFAULT 0, alert_id INTEGER)")
             conn.execute("CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, ts REAL NOT NULL)")
             conn.execute("CREATE TABLE IF NOT EXISTS price_state (symbol TEXT PRIMARY KEY, price REAL NOT NULL, ts REAL NOT NULL)")
             # One push event per symbol per New York date (design-alert-policy.md section 1 and 7).
@@ -334,6 +339,22 @@ class Store:
                 "INSERT OR IGNORE INTO earnings_seen (accession, symbol, cik, held, filed, accepted_at, primary_doc, url, detected_at, seeded)"
                 " VALUES (:accession, :symbol, :cik, :held, :filed, :accepted_at, :primary_doc, :url, :detected_at, :seeded)", row)
             return cur.rowcount > 0
+
+    def add_filing(self, row: dict) -> bool:
+        """True when this accession is new (a repeat, or a restart, is a no-op)."""
+        with self._conn() as conn:
+            cur = conn.execute(
+                "INSERT OR IGNORE INTO filings_seen (accession, symbol, cik, form, items, filed, accepted_at, url, detected_at, seeded)"
+                " VALUES (:accession, :symbol, :cik, :form, :items, :filed, :accepted_at, :url, :detected_at, :seeded)", row)
+            return cur.rowcount > 0
+
+    def filings_count(self, symbol: str) -> int:
+        with self._conn() as conn:
+            return int(conn.execute("SELECT COUNT(*) FROM filings_seen WHERE symbol = ?", (symbol,)).fetchone()[0])
+
+    def set_filing_alert(self, accession: str, alert_id: int) -> None:
+        with self._conn() as conn:
+            conn.execute("UPDATE filings_seen SET alert_id = ? WHERE accession = ?", (alert_id, accession))
 
     def earnings_rows(self, where: str = "1=1", params: tuple = ()) -> list[dict]:
         with self._conn() as conn:
