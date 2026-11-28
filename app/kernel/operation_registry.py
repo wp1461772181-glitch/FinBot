@@ -157,6 +157,7 @@ OPERATION_REGISTRY: dict[tuple[str, str], dict] = {
     ("POST", "/agent-chat/public-marks/resume"): _no("恢复展示要人亲自给出回放引用"),
     ("POST", "/agent-chat/internal/sentinel/events"): _no("机器接口，只收回环地址加密令，不是用户操作"),
     ("PUT", "/agent-chat/local-model-profiles"): _no("只在本机开发模式开启，公开模式下直接 404"),
+    ("PUT", "/agent-chat/permission-mode"): _no("放行档位是安全设置，只由 owner 在设置页上改，助手不能替他放宽"),
 }
 
 # Operations ``act`` has that no HTTP route corresponds to; naming one here keeps the "every operation is on a route" check honest.

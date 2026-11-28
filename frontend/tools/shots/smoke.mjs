@@ -10088,6 +10088,37 @@ async function watchRules(ctx) {
   return "hard guarantees have no switch; switch, threshold (0 refused unsent), reset, sensitivity, 5-minute switch and delete (cancel sends nothing) send one write each with the contract's body; no sideways overflow at 390";
 }
 
+/** 权限 (11-28): the account page shows the three modes with 默认 chosen and what it means; choosing 完全放行 sends one PUT {mode:"full"} and the line
+ * changes; the lines that hold in every mode are there; a guest sees no permission card; no sideways overflow at 390. */
+async function permissionModes(ctx) {
+  const view = await asOpen(ctx, "permission modes", "#/settings/account", "[data-testid=account-permission] [data-testid=permission-what]", { width: 390 });
+  try {
+    const { page } = view;
+    const writes = () => view.mock.state.permission.writes;
+    const choice = (mode) => page.locator(`[data-testid=permission-choice] label[data-option=${mode}]`);
+    const chosen = () => page.locator("[data-testid=permission-choice] input:checked").getAttribute("value");
+    assert((await page.locator("[data-testid=permission-choice] label[data-option]").count()) === 3, "expected three modes");
+    assert((await chosen()) === "default", "默认 is not chosen");
+    assert((await page.locator("[data-testid=permission-what]").innerText()).includes("放进确认卡等你点"), "the default line is missing");
+    assert((await page.locator("[data-testid=permission-always] li").count()) === 3, "the lines that hold in every mode are missing");
+    const wide = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    assert(wide <= 0, `sideways overflow of ${wide}px at 390`);
+    await choice("full").click();
+    await page.waitForFunction(() => document.querySelector("[data-testid=permission-choice] input:checked")?.getAttribute("value") === "full", null, { timeout: 8000 });
+    assert(writes().length === 1 && JSON.stringify(writes()[0].body) === '{"mode":"full"}', `the write is not the contract's: ${JSON.stringify(writes())}`);
+    assert((await page.locator("[data-testid=permission-what]").innerText()).includes("不弹确认卡"), "the full-access line did not replace the default one");
+    await choice("full").click();
+    assert(writes().length === 1, "choosing the mode already chosen sent another write");
+  } finally { await view.close(); }
+  const guest = await newView(ctx.browser, { width: 1440, theme: "light", label: "permission modes: guest", identity: "guest", unmatched });
+  try {
+    await guest.page.goto(`${ctx.server.url}#/settings/account`, { waitUntil: "load" });
+    await guest.page.locator("[data-testid=account-about]").waitFor({ timeout: 10000 });
+    assert((await guest.page.locator("[data-testid=account-permission]").count()) === 0, "a guest sees the permission card");
+  } finally { await guest.close(); }
+  return "three modes, 默认 chosen with its line; 完全放行 sends one PUT {mode:full} and its line replaces the default one; choosing it again sends nothing; three always-lines; guest has no card; no sideways overflow at 390";
+}
+
 async function memoryNotesOnce(ctx) {
   const PROFILE = AS.memory.load.paragraphs[0], SCOPE = AS.memory.load.paragraphs[1], RECALL = AS.memory.recall.load.paragraphs[0];
   const times = (text, note) => text.split(note).length - 1;
@@ -12092,6 +12123,7 @@ const CHECKS = [
   ["skills-keyboard: a skill made and saved with the keyboard alone, the card's 「…」 menu with Esc returning the focus, the editor closed with Esc and the focus back on 编辑", skillsKeyboard],
   ["memory-ops: the nine memory operations (add ×3, edit with Enter / Esc, scope, 确认 only on inferred, delete by hold, the 往事 tab in the address, search only on submit, the bot filter, open a conversation) send the old requests; a refresh keeps the tab", memoryOps],
   ["owner-views: the company page's 你的看法 card (current view, his words, date, folded history, delete with a confirm) and the memory page's section", ownerViews],
+  ["permission-modes: the account page's 权限 card: three modes, the chosen one's line, one PUT per change, none for the same choice, no card for a guest", permissionModes],
   ["watch-rules: the memory page's rules block: his rules, the system defaults (a hard guarantee has no switch), the switch, the threshold edit, restore, the sensitivity, the 5-minute switch and delete each send the contract's write", watchRules],
   ["memory-notes-once: each tab's one sentence appears exactly once, word for word as the old page, and not on the other tab; inferred items carry 推断 and 确认, the others neither", memoryNotesOnce],
   ["memory-settle: 长期 tag and 最近一次印证 on items; archived group with reason, date and 恢复 (one POST, no dialog), restored items return to their group; an archived view on the company page with its reason and 恢复; a history row says 已归档", memorySettle],

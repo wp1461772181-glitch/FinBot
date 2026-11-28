@@ -32,11 +32,11 @@ GOLDEN = {
     # 5b-1: the owner's tools gain set_watch_rule / delete_watch_rule in act and the list_watch_rules read (the system text is unchanged).
     # 5c-3c: act gains rate_alert (the system text is unchanged).
     # 5d-3a: act gains rate_answer, and each tier-1 operation's line names its arguments (the system text is unchanged).
-    # 11-28: escalate takes depth max; act gains report_missed; the owner gets open_page; the system text gains the report_missed and key lines.
-    "owner": ("0eb7b5cd8f48c2f352ec4a9b57376f9478a4aa009f8d2392956994af33e3910f",
-               "5324fbaeaf4d8e1aaa821a8208ff91c016adc63f0a3ca08a6277a642f9b25995"),
+    # 11-28: act says how the permission mode decides, and its go_ahead; act: saving a page is tier 3 again; the system text: fetching official material (saving a page is a write to confirm), the card blocks one step, a task is done through; before that: escalate max, report_missed, open_page; the system text gains the report_missed and key lines.
+    "owner": ("6e5e0e5704e255f33e1febda9254715e759851782708477e93d9825bb7747b65",
+               "cec126e7b958508352eaa325becfc52ce6730ce61e678aa31fbaf36035c64275"),
     # 6a: a guest's system prompt gains the line about what only the owner can do (``prompt.GUEST_NOTE``); the owner's is unchanged.
-    "guest": ("36a4a6c9ee1cdeeef86e81be9dc5d263a22e8acb719762466120b32b39c58666", "8326995c39def007bd3949a5cd01526a6494ce66f3823e6a1308063c5ebf2080"),
+    "guest": ("36a4a6c9ee1cdeeef86e81be9dc5d263a22e8acb719762466120b32b39c58666", "7173d7a0cd6d9ed3831414bd251ccd2736034cbc3a39cac0f1b995d75b8cffef"),
 }
 
 

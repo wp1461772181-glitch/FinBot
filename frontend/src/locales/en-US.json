@@ -2784,5 +2784,16 @@
   "现在手上没有事。": "Nothing on hand right now.",
   "它在回答、跑例行任务或处理你交办的事时，会列在这里。": "Answers in progress, routines and work you handed over show up here.",
   "登录个人聊天后才能查看手上的事。": "Sign in to your personal chat to see what is on hand.",
-  "手上的事暂时无法读取。": "What is on hand cannot be read right now."
+  "手上的事暂时无法读取。": "What is on hand cannot be read right now.",
+  "权限": "Permissions",
+  "每步都问": "Ask every step",
+  "完全放行": "Full access",
+  "它可以替你做多少事、哪些要先问你。": "How much it may do for you, and what it asks you first.",
+  "权限已改为「{label}」，从你的下一条消息起生效。": "Permissions set to “{label}”; this applies from your next message.",
+  "每一个会写东西的操作都先放进确认卡，你点了才执行，连记一条偏好也一样。": "Every action that writes anything goes onto a confirmation card first and runs only when you press it, even noting a preference.",
+  "查资料、拉取官方公开资料（SEC 原文、价格历史）、记偏好、加减研究队列直接做；把网页存进资料库、记交易、改计划、建例行任务、改设置，以及发起预测、删除这类花钱或不可撤销的，放进确认卡等你点。": "Looking things up, fetching official public material (SEC filings, price history), noting preferences and editing the research queue happen at once. Saving a web page to your materials, recording trades, changing plans, creating routines, changing settings, and anything that costs money or can't be undone, such as starting a forecast or deleting, waits on a confirmation card for you.",
+  "下单交易、填密钥和登录凭证，它永远不做。": "It never places trades or enters keys or login credentials.",
+  "对话里说「这次不用确认，直接做」，只对那一轮生效。": "Saying “no need to confirm, just do it” in a chat applies to that turn only.",
+  "删除以外的操作都直接做，不弹确认卡；做完在回答里逐条告诉你做了什么、怎么撤销。": "Everything except deleting runs at once with no confirmation card; the answer then lists what was done and how to undo it.",
+  "不论哪一档：删除永远先问你；它在这一轮查过网页、新闻或申报之后，要改你数据的操作也放进确认卡，免得被资料里的话支使。": "In every mode: deleting always asks you first, and once it has looked at web pages, news or filings in a turn, any action that would change your data waits on a card too, so nothing in that material can steer it."
 }

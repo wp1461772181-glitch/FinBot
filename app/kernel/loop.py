@@ -88,6 +88,10 @@ class _Run:
     question: str = ""      # this turn's user message, as typed
     turn_id: str = ""
     tier: str = "low"
+    permission_mode: str | None = None
+    typed_this_turn: str = ""
+    outside_in_prompt: bool = False    # outside text came in without a read (a latest-known block, a skill): see act._runs_at_once
+    done_at_once: dict = field(default_factory=dict)          # what he sent while this turn ran (``question`` is what began it); never an earlier turn   # his permission mode, read once a turn by ``act`` (``app.permission_mode``)
     started: float = field(default_factory=time.monotonic)
     citations: list = field(default_factory=list)
     web_rows: dict = field(default_factory=dict)      # url -> the raw row of a page this turn's web reads returned (what ``act`` may save)
@@ -552,6 +556,7 @@ async def _intake(run: _Run) -> None:
     run.messages.append({"role": "system", "content": prompt.interjection_note([m.id[:inboxes.SHORT_ID] for m in fresh], paused=run.cut)})
     run.cut = False
     run.user_text += "\n" + "\n".join(m.text for m in fresh)      # his figures may be bound by ``calculate`` like any he typed
+    run.typed_this_turn += "\n" + "\n".join(m.text for m in fresh)
     mark_timeline(run, "interjection", count=len(fresh))
     mark_progress()
 
@@ -640,6 +645,9 @@ async def _latest_block(run: "_Run", text: str, previous: str | None, focus: str
         return None
     if not found:
         return None
+    # News titles are third-party text, and 往来 and notices carry earlier answers that may retell a page; not every line is a cited
+    # row, so any block counts (fails shut; 11-28 review).
+    run.outside_in_prompt = True
     note_latest(run, symbols)
     return found
 
@@ -724,6 +732,8 @@ async def _run_turn(question: str, context, emit, messages: list[dict] | None = 
         latest = await _latest_block(run, run.question if fact else question, _previous_user_message(history, run.question if fact else question, original=bool(fact)),
                                      company.get("symbol") if isinstance(company, dict) else None, owner)
         run.messages = prompt.build_messages(question, context, history, fact=fact, skill=started, latest=latest, helper=helper.DELEGATE in run.tool_names)
+        if started:
+            run.outside_in_prompt = True     # a skill's steps can be imported text
         if started and owner_credential_matches(getattr(context, "identity_credential", "")):
             run.audit["skill"] = {"name": started["name"], "version": started["version"]}
         run.user_text = _user_text(run.question, history)

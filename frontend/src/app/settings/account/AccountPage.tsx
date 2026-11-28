@@ -1,6 +1,7 @@
 import { useLocale } from "../../../i18n";
 import { useWorkspace } from "../../workspace";
 import { SettingsCard } from "../SettingsCard";
+import { PermissionCard } from "./PermissionCard";
 import { version } from "../../../../package.json";
 
 /**
@@ -17,6 +18,7 @@ export function AccountPage() {
       <p data-testid="account-mode-name" className="text-body font-medium text-ink">{personal ? t("个人模式") : t("访客只读")}</p>
       <p className="text-small text-muted-foreground">{t("切换模式和登出都在侧栏底部的账户菜单里；手机上在「更多」里。")}</p>
     </SettingsCard>
+    {personal && <PermissionCard />}
     <SettingsCard id="account-about" title={t("关于")} testid="account-about">
       <div className="flex items-center gap-4">
         <img src={`${import.meta.env.BASE_URL}logo.svg`} alt="" aria-hidden="true" data-testid="account-logo" className="size-16 shrink-0 object-contain" />
