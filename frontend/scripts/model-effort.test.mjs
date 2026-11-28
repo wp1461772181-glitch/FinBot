@@ -302,8 +302,12 @@ test("the selector keeps its behaviour: the server default row, 缺 key, the sen
   assert.match(panel, /t\("模型和 key 只在服务器上，浏览器不保存 key。"\)/);
   // Every opening starts the list's highlight on the current model (the panel stays mounted between openings).
   assert.match(panel, /useEffect\(\(\) => \{ if \(props\.open\) setHighlight\(props\.shown\.model \?\? DEFAULT_VALUE\); \}, \[props\.open, props\.shown\.model\]\)/);
-  // Wide screen: the Model Selector dialog; narrow: a drawer.  Both carry a title for a screen reader.
-  assert.match(panel, /<ModelSelectorContent title=\{title\}/);
-  assert.match(panel, /<DrawerTitle className="sr-only">/);
-  assert.match(panel, /useMatchMedia\(PHONE_QUERY\)/);
+});
+
+test("the list opens in the composer itself: a popover anchored to the badge, above it, on every screen; no dialog, no drawer (owner 11-28)", () => {
+  const panel = tsx("app/chat/ModelEffortPanel.tsx");
+  const picker = tsx("app/chat/ModelEffortPicker.tsx");
+  assert.match(picker, /<PopoverTrigger asChild>/);
+  assert.match(picker, /<PopoverContent side="top" align="start"[^>]*data-testid="model-picker"[^>]*aria-label=\{t\("模型"\)\}/);
+  for (const source of [panel, picker]) assert.doesNotMatch(source, /Drawer|ModelSelectorContent|<ModelSelector |Dialog|useMatchMedia/);
 });
