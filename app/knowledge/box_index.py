@@ -239,7 +239,8 @@ def run_once(session_factory=None, parts: Parts | None = None, *, max_chunks: in
     for kind in kinds:
         try:
             result = sync_source_batch(session_factory, parts.tokenizer, generation, source_type=kind, batch_size=5)
-            synced[kind] = {k: result[k] for k in ("scanned", "accepted") if k in result}
+            # ``documents`` / ``chunks``: what this page added (an unchanged source is ``skipped``); ``scanned`` is the page itself.
+            synced[kind] = {k: result[k] for k in ("scanned", "documents", "chunks", "skipped") if k in result}
         except Exception:  # noqa: BLE001 - one source kind's trouble does not stop the others or the indexing
             log.exception("knowledge sync of %s failed", kind)
             synced[kind] = {"error": True}
