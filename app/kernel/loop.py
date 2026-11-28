@@ -36,8 +36,11 @@ READ_TOOLS: tuple[str, ...] = ("query_financials", "query_stock_prices", "query_
     "query_alerts", "query_holdings_overview", "read_workspace", "query_system_status", "query_research_queue", "list_routines", "list_models", "list_work", "list_watch_rules")
 logger = logging.getLogger(__name__)
 MAX_STEPS = 12
+DEEP_MAX_STEPS = 40   # a deep-research turn (tier max): the owner asked for it and is not waiting on the page
 MAX_SETS = 6          # as the old engine: the last six result sets of a conversation
 SOFT_SECONDS = 180
+DEEP_SOFT_SECONDS = 600   # well inside the stream's own MAX_TURN_SECONDS (1200): a last step and the closing call (each up to the
+                          # provider's 180 s, plus a retry) still end before it, so the wrap-up comes first
 IDLE_SECONDS = 300
 RETRY_WAIT_SECONDS = 1
 # Mirrors the old turn's RETRYABLE_PROVIDER list minus provider_protocol_too_large (resending the same request cannot cure it).
@@ -304,6 +307,11 @@ async def _call_model(run: _Run, tool_schemas: list[dict], *, tier: str | None =
                 found = await _backup_for(run)
                 if found and (found.get("provider"), found.get("model")) != (use.provider, use.model):
                     raise
+            if tier == tiers.DEEP and _failure_code(failure) == "provider_incomplete_response":
+                # Shadow 11-28: at max the model spent all 32768 output tokens thinking, twice, and wrote nothing (300 s lost).  The
+                # same step again is made at high: the research goes on, this one step thinks less deeply.
+                tier = "high"
+                run.audit["deep_step_down"] = run.audit.get("deep_step_down", 0) + 1
             await asyncio.sleep(RETRY_WAIT_SECONDS)
             continue
         run.audit["model_calls"] += 1
@@ -504,8 +512,10 @@ async def _finish(run: _Run, message: dict, stop_reason: str | None, may_ask_aga
 
 async def _loop(run: _Run) -> dict:
     stop = "step_cap"
-    for _ in range(MAX_STEPS):
-        if time.monotonic() - run.started > SOFT_SECONDS:
+    steps = 0
+    while steps < (DEEP_MAX_STEPS if run.tier == tiers.DEEP else MAX_STEPS):
+        steps += 1
+        if time.monotonic() - run.started > (DEEP_SOFT_SECONDS if run.tier == tiers.DEEP else SOFT_SECONDS):
             stop = "time_cap"
             break
         await _intake(run)
@@ -654,6 +664,17 @@ async def run_turn(question: str, context, emit, messages: list[dict] | None = N
     return result
 
 
+def _ceiling(context) -> str:
+    """The server's top tier, except that deep research (max) is the owner's own, asked for in a turn he is in: a guest, a scheduled
+    run or a brief stops at high (nobody there to come back to)."""
+    top = tiers.ceiling()
+    if top != tiers.DEEP:
+        return top
+    if getattr(context, "unattended", False) or not owner_credential_matches(getattr(context, "identity_credential", "") or ""):
+        return "high"
+    return top
+
+
 async def _run_turn(question: str, context, emit, messages: list[dict] | None = None, state: dict | None = None) -> dict:
     state = state or {}
     history = list(messages or [])[1:]   # the first message is the endpoint's own system prompt
@@ -663,7 +684,7 @@ async def _run_turn(question: str, context, emit, messages: list[dict] | None = 
     run = _Run(context=context, emit=emit, messages=[], user_text="", schemas=tool_schemas,
                tool_names=frozenset(s["function"]["name"] for s in tool_schemas),
                model=ModelUse(context.provider, context.model, context.api_key, context.base_url, getattr(context, "catalog_name", None)),
-               ceiling=tiers.ceiling(),
+               ceiling=_ceiling(context),
                question=question, turn_id=str(state.get("turn_id") or ""), inbox=getattr(context, "inbox", None),
                carried_sets=[x for x in state.get("result_sets") or [] if isinstance(x, dict) and x.get("owner") == context.owner_hash
                              and x.get("conversation") == context.conversation_id and isinstance(x.get("rows"), list)][-MAX_SETS:])
@@ -732,7 +753,7 @@ async def run_wake(context, emit, messages: list[dict], *, turn_id: str, latest_
     run = _Run(context=context, emit=emit, messages=messages, user_text="", schemas=tool_schemas,
                tool_names=frozenset(s["function"]["name"] for s in tool_schemas),
                model=ModelUse(context.provider, context.model, context.api_key, context.base_url, getattr(context, "catalog_name", None)),
-               ceiling=tiers.ceiling(), turn_id=turn_id, wake=decide.WakeState())
+               ceiling=tiers.clamp(tiers.ceiling(), "high"), turn_id=turn_id, wake=decide.WakeState())     # nobody asked for deep research
     if latest_symbols:
         note_latest(run, latest_symbols)
     async with progress_watchdog(IDLE_SECONDS), provider.decision_session(context.base_url):

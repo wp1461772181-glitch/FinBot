@@ -32,10 +32,11 @@ GOLDEN = {
     # 5b-1: the owner's tools gain set_watch_rule / delete_watch_rule in act and the list_watch_rules read (the system text is unchanged).
     # 5c-3c: act gains rate_alert (the system text is unchanged).
     # 5d-3a: act gains rate_answer, and each tier-1 operation's line names its arguments (the system text is unchanged).
-    "owner": ("d3bd29a8d17d179a333825a0dc071965d3d965062e701e5519dcfc989958e550",
+    # 11-28 deep research: escalate takes depth max (both schemas change; the system texts are unchanged).
+    "owner": ("93ab5113d69286de2f9ff319e66f9df4a33463b22bcc96a12cfb48903f3aa046",
                "a8939601bb56f0e88c086dbccfe6e622e619b16b8c19b56d48e566b558928303"),
     # 6a: a guest's system prompt gains the line about what only the owner can do (``prompt.GUEST_NOTE``); the owner's is unchanged.
-    "guest": ("cc697baf95543b43614509bb70ea10889ed11ab173f2089dd28e703b49fdaa4d", "e02eb10753903050001bcd7b2958b43b174e6eb5c68cf837ae04753d8b6d3eff"),
+    "guest": ("36a4a6c9ee1cdeeef86e81be9dc5d263a22e8acb719762466120b32b39c58666", "e02eb10753903050001bcd7b2958b43b174e6eb5c68cf837ae04753d8b6d3eff"),
 }
 
 
