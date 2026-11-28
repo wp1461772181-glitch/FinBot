@@ -185,3 +185,74 @@ def test_detection_delay_is_recorded(tmp_path):
     world.watcher.poll(datetime(2026, 10, 29, 20, 33, 7, tzinfo=UTC).timestamp())
     row = world.store.earnings_rows()[0]
     assert round(row["detected_at"] - datetime(2026, 10, 29, 20, 31, 7, tzinfo=UTC).timestamp()) == 120
+
+
+def test_a_failing_filing_check_never_blocks_earnings(tmp_path):
+    """Review 11-28: a half-filled SEC row in another form must not keep the earnings 8-K out."""
+    world = World(tmp_path, {"INTC": [r("8-K", "2.02,9.01", "0000050863-26-000188"), r("10-Q", "", "0000050863-26-000189", accepted="")]})
+    world.watcher.poll(NOW)
+    assert [e[1]["accession"] for e in world.events] == ["0000050863-26-000188"]
+    world2 = World(tmp_path / "b", {"INTC": [r("8-K", "2.02,9.01", "0000050863-26-000188")]}) if (tmp_path / "b").mkdir() is None else None
+    world2.watcher.raise_alert = lambda snap, alert: (_ for _ in ()).throw(RuntimeError("other path broken"))
+    world2.watcher.check_other_filings = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom"))
+    world2.watcher.poll(NOW)
+    assert [e[1]["accession"] for e in world2.events] == ["0000050863-26-000188"]
+
+
+def test_half_filled_rows_are_skipped_not_fatal():
+    sub = submissions(r("10-Q", "", "A1", accepted=""), r("8-K", "8.01", "A2"))
+    sub["filings"]["recent"]["items"] = ["", "8.01"][:1]          # items shorter than form
+    assert [p["accession"] for p in parse_new_filings(sub)] == ["A2"]
+
+
+def test_an_alert_that_fails_is_tried_again_not_lost(tmp_path):
+    world = World(tmp_path, {"INTC": [r("8-K", "5.02", "0000050863-26-000100")]})
+    real = world.watcher.raise_alert
+    world.watcher.raise_alert = lambda snap, alert: (_ for _ in ()).throw(OSError("disk"))
+    world.watcher.poll(NOW)
+    assert world.alerts == [] and not world.store.filing_seen("0000050863-26-000100")
+    world.watcher.raise_alert = real
+    world.watcher.next_poll.clear()
+    world.watcher.poll(NOW + 600)
+    assert [a["filing"]["accession"] for a in world.alerts] == ["0000050863-26-000100"]
+
+
+def test_a_first_look_that_fails_halfway_does_not_flood(tmp_path):
+    old = "2026-10-01T20:31:07.000Z"
+    rows = [r("8-K", "8.01", "NEW1"), *[r("10-Q", "", f"OLD{n}", filed="2026-10-01", accepted=old) for n in range(5)]]
+    world = World(tmp_path, {"INTC": rows})
+    real, calls = world.watcher.raise_alert, []
+    def flaky(snap, alert):
+        calls.append(alert)
+        raise OSError("disk")
+    world.watcher.raise_alert = flaky
+    world.watcher.poll(NOW)
+    world.watcher.raise_alert = real
+    world.watcher.next_poll.clear()
+    world.watcher.poll(NOW + 600)
+    assert [a["filing"]["accession"] for a in world.alerts] == ["NEW1"]      # the old ones stay history
+
+
+def test_back_in_the_holdings_after_days_is_a_first_look_again(tmp_path):
+    world = World(tmp_path, {"INTC": [r("8-K", "8.01", "0000050863-26-000100")]})
+    world.watcher.poll(NOW)
+    assert len(world.alerts) == 1
+    later = NOW + 10 * 86400                                    # out of the watch for ten days, then back
+    world.rows["INTC"].append(r("10-Q", "", "0000050863-26-000500", filed="2026-11-02", accepted="2026-11-02T20:00:00.000Z"))
+    world.watcher.next_poll.clear()
+    world.watcher.poll(later)
+    assert len(world.alerts) == 1                               # seven days old on its return: history, not news
+
+
+def test_amended_earnings_and_schedule_13d_are_told(tmp_path):
+    world = World(tmp_path, {"INTC": [r("8-K/A", "2.02,9.01", "A-AMEND"), r("SCHEDULE 13D", "", "A-13D"), r("SCHEDULE 13G/A", "", "A-13G")]})
+    world.watcher.poll(NOW)
+    assert sorted(a["filing"]["accession"] for a in world.alerts) == ["A-13D", "A-AMEND"]
+    assert world.events == []                                   # an amended earnings 8-K is not a new earnings event
+
+
+def test_the_digest_line_keeps_the_link(tmp_path):
+    world = World(tmp_path, {"INTC": [r("8-K", "5.02", "0000050863-26-000100")]})
+    world.watcher.poll(NOW)
+    line = world.alerts[0]["digest_text"]
+    assert "\n" not in line and "高管或董事变动" in line and "https://www.sec.gov/" in line

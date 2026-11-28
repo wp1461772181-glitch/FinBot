@@ -348,6 +348,10 @@ class Store:
                 " VALUES (:accession, :symbol, :cik, :form, :items, :filed, :accepted_at, :url, :detected_at, :seeded)", row)
             return cur.rowcount > 0
 
+    def filing_seen(self, accession: str) -> bool:
+        with self._conn() as conn:
+            return conn.execute("SELECT 1 FROM filings_seen WHERE accession = ?", (accession,)).fetchone() is not None
+
     def filings_count(self, symbol: str) -> int:
         with self._conn() as conn:
             return int(conn.execute("SELECT COUNT(*) FROM filings_seen WHERE symbol = ?", (symbol,)).fetchone()[0])
