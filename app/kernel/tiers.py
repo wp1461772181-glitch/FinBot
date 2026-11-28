@@ -1,6 +1,8 @@
 """Thinking tiers.  A turn starts at ``low``; the model raises the tier with the kernel's own ``escalate`` tool.
 
-The bot's configured effort is only a ceiling.  The tier is kept on the run object, never in module state.
+How hard to think is the model's call, question by question (owner 11-22): a bot's stored effort is not read (11-28: it had become a
+ceiling the owner set by hand).  The only ceiling is the server's ``FINBOT_KERNEL_TOP_TIER`` (low / mid / high, default high: none), a
+spending setting, not a user choice.  The tier is kept on the run object, never in module state.
 """
 from __future__ import annotations
 
@@ -19,14 +21,11 @@ ESCALATE_SCHEMA: dict = {
 }
 
 
-def ceiling(bot_effort: str | None) -> str:
-    """The highest tier this bot may use."""
-    if bot_effort is None:
-        return "high"
-    effort = str(bot_effort).strip().lower()
-    if effort in ("none", "minimal", "low"):
-        return "low"
-    return "mid" if effort == "medium" else "high"
+def ceiling() -> str:
+    """The highest tier a turn may reach: the server's ``FINBOT_KERNEL_TOP_TIER``, else ``high`` (an unknown value counts as unset)."""
+    import os
+    value = (os.environ.get("FINBOT_KERNEL_TOP_TIER") or "").strip().lower()
+    return value if value in TIERS else "high"
 
 
 def clamp(requested: str, top: str) -> str:
@@ -42,7 +41,7 @@ def escalate(run, args: dict) -> dict:
     if TIERS.index(tier) > TIERS.index(run.tier):
         run.tier = tier
     if tier != depth:
-        note = f"这个助手最高只到 {tier} 档，已按 {tier} 档继续。"
+        note = f"服务器设置的上限是 {tier} 档，已按 {tier} 档继续。"
     else:
         note = f"已切换到 {tier} 档，请继续。"
     return {"ok": True, "tier": run.tier, "note": note}

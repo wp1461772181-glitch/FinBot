@@ -590,7 +590,7 @@ async def _run_turn(question: str, context, emit, messages: list[dict] | None = 
     run = _Run(context=context, emit=emit, messages=[], user_text="", schemas=tool_schemas,
                tool_names=frozenset(s["function"]["name"] for s in tool_schemas),
                model=ModelUse(context.provider, context.model, context.api_key, context.base_url, getattr(context, "catalog_name", None)),
-               ceiling=tiers.ceiling(getattr(context, "reasoning_effort", None)),
+               ceiling=tiers.ceiling(),
                question=question, turn_id=str(state.get("turn_id") or ""), inbox=getattr(context, "inbox", None),
                carried_sets=[x for x in state.get("result_sets") or [] if isinstance(x, dict) and x.get("owner") == context.owner_hash
                              and x.get("conversation") == context.conversation_id and isinstance(x.get("rows"), list)][-MAX_SETS:])
@@ -659,7 +659,7 @@ async def run_wake(context, emit, messages: list[dict], *, turn_id: str, latest_
     run = _Run(context=context, emit=emit, messages=messages, user_text="", schemas=tool_schemas,
                tool_names=frozenset(s["function"]["name"] for s in tool_schemas),
                model=ModelUse(context.provider, context.model, context.api_key, context.base_url, getattr(context, "catalog_name", None)),
-               ceiling=tiers.ceiling(getattr(context, "reasoning_effort", None)), turn_id=turn_id, wake=decide.WakeState())
+               ceiling=tiers.ceiling(), turn_id=turn_id, wake=decide.WakeState())
     if latest_symbols:
         note_latest(run, latest_symbols)
     async with progress_watchdog(IDLE_SECONDS), provider.decision_session(context.base_url):

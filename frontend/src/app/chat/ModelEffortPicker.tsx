@@ -58,8 +58,7 @@ export function ModelEffortPicker({ bot, onBotChanged }: { bot: Bot; onBotChange
     try {
       const saved = await updateBot(bot.id, patchFor(kind, value));
       setShown(saved);
-      // A model choice stays open: the strength list below is the new model's now, so the owner sees it in this visit.
-      if (kind === "effort") setOpen(false);
+      setOpen(false);      // the panel holds the model only (no effort row since 11-28): a choice closes it
       onBotChanged();
     } catch (exc) {
       setError(exc instanceof Error && exc.message ? exc.message : t("保存失败，请重试。"));
@@ -71,15 +70,12 @@ export function ModelEffortPicker({ bot, onBotChanged }: { bot: Bot; onBotChange
   const view = triggerView(shown, entry);
   return (
     <span className="relative inline-flex min-w-0" data-testid="model-badge-host">
-      <button type="button" ref={badge} data-testid="model-badge" aria-haspopup="dialog" aria-expanded={open} aria-label={`${t("模型")} · ${view.name ?? t("服务器默认模型")} · ${t(view.level)}`}
-        title={t("快速切换模型与推理强度")} disabled={busy} onClick={() => void toggle()} onPointerEnter={() => void loadPanel()} onFocus={() => void loadPanel()}
-        data-open={open || undefined} style={{ "--t": view.tone } as React.CSSProperties}
+      <button type="button" ref={badge} data-testid="model-badge" aria-haspopup="dialog" aria-expanded={open} aria-label={`${t("模型")} · ${view.name ?? t("服务器默认模型")}`}
+        title={t("快速切换模型")} disabled={busy} onClick={() => void toggle()} onPointerEnter={() => void loadPanel()} onFocus={() => void loadPanel()}
+        data-open={open || undefined}
         className="model-trigger inline-flex h-8 max-lg:h-11 max-w-full min-w-0 items-center gap-1.5 rounded-md pl-1.5 pr-2 text-caption font-medium text-ink-2 outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60 data-[open]:bg-accent">
         <span className="picker-tile picker-tile-sm" aria-hidden="true"><img src={logoUrl(view.logo)} alt="" width={12} height={12} className="size-3 dark:invert" /></span>
         <span className="truncate">{view.name ?? t("服务器默认模型")}</span>
-        <span aria-hidden="true" className="size-[3px] shrink-0 rounded-full bg-faint" />
-        {view.bars > 0 && <span className="effort-bars" aria-hidden="true">{[1, 2, 3].map((n) => <i key={n} data-on={n <= view.bars ? "true" : undefined} />)}</span>}
-        <span className="effort-gradient-text shrink-0" data-high={view.high ? "true" : undefined}>{t(view.level)}</span>
         <ChevronDown className={`size-3 shrink-0 text-faint transition-transform ${open ? "rotate-180" : ""}`} aria-hidden="true" />
       </button>
       {mounted && <OptionalChunk>

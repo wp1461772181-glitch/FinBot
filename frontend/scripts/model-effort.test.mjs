@@ -143,13 +143,18 @@ test("tiers, stored value the model takes: no duplicate row, ordinary tick", () 
   assert.ok(choices.every((c) => !c.unsupported));
 });
 
-test("tiers: the picker reads the effective entry and passes it to the strength list", () => {
+test("no effort choice anywhere: the composer's selector and the bot settings offer the model only and say depth is the model's call (11-28)", () => {
   const picker = tsx("app/chat/ModelEffortPicker.tsx");
   const panel = tsx("app/chat/ModelEffortPanel.tsx");
+  const form = tsx("app/bot-settings/FormSections.tsx");
   assert.match(picker, /effectiveEntry\(catalog, shown\.model\)/);
-  assert.match(panel, /effortChoices\(shown\.reasoning_effort, entry\)/);
-  assert.match(panel, /noEffort\(entry\)/);
-  assert.match(panel, /current\?\.unsupported \? t\("不在该模型的档位内"\)/);
+  for (const source of [panel, form]) {
+    assert.doesNotMatch(source, /effortChoices\(|role="radiogroup"|effort-select|effort-seg/);
+    assert.doesNotMatch(source, /t\("推理强度"\)/);
+  }
+  assert.match(panel, /t\("思考深度不用选：它按每个问题自己决定，从浅到深。"\)/);
+  assert.match(form, /t\("思考深度不用设置：它按每个问题自己决定，从浅到深。"\)/);
+  assert.doesNotMatch(picker, /view\.bars|view\.level|推理强度/);
 });
 
 test("tiers, zhipu shape (GLM-5.3 family): exactly low, high, max; a stored medium sits above them, marked", () => {
@@ -161,14 +166,13 @@ test("tiers, zhipu shape (GLM-5.3 family): exactly low, high, max; a stored medi
   assert.equal(stored[0].unsupported, true);
 });
 
-test("picking a model keeps the panel open on the new model's tiers; picking a strength closes it", () => {
+test("picking a model closes the panel (there is no strength row below it any more)", () => {
   const picker = tsx("app/chat/ModelEffortPicker.tsx");
   const choose = picker.slice(picker.indexOf("async function choose("), picker.indexOf("\n  return (\n"));
   assert.ok(choose.length > 0, "choose() is found in the picker source");
   // Same choice again: closes, as before.
   assert.match(choose, /if \(\(value \?\? null\) === \(current \?\? null\)\) \{ setOpen\(false\); return; \}/);
-  // After a successful save the model choice leaves the panel open; only a strength closes it.
-  assert.match(choose, /setShown\(saved\);\s*(?:\/\/[^\n]*\s*)?if \(kind === "effort"\) setOpen\(false\);/);
+  assert.match(choose, /setShown\(saved\);\s*setOpen\(false\);/);
 });
 
 // --- the composer's model selector (palette + strength control): logos, groups, the badge's parts, and what the sources must keep ---
@@ -291,20 +295,11 @@ test("the selector's sources: one gradient in one place, no colour written in th
   for (const level of [null, ...EFFORT_LEVELS]) assert.ok(zh.includes(effortLabel(level)), `label not in zh-CN.json: ${effortLabel(level)}`);
 });
 
-test("the selector keeps its behaviour: the server default row, 缺 key, the model's tiers only, the stored tier marked, the sentence about keys, a radio group the keyboard reaches", () => {
+test("the selector keeps its behaviour: the server default row, 缺 key, the sentence about keys", () => {
   const panel = tsx("app/chat/ModelEffortPanel.tsx");
   assert.match(panel, /t\("服务器默认模型"\)/);
   assert.match(panel, /t\("缺 key"\)/);
-  assert.match(panel, /t\("该模型不支持思考强度"\)/);
   assert.match(panel, /t\("模型和 key 只在服务器上，浏览器不保存 key。"\)/);
-  assert.match(panel, /role="radiogroup"[^>]*aria-labelledby/);
-  assert.match(panel, /role="radio"[\s\S]{0,120}aria-checked=\{choice\.checked\}/);
-  assert.match(panel, /tabIndex=\{choice\.checked \? 0 : -1\}/);
-  // Nothing is disabled for being unsupported; only a save in flight holds the choices (aria-disabled keeps the focus where it is).
-  assert.doesNotMatch(panel, /disabled=\{[^}]*unsupported/);
-  // The strength row's keys never reach the list's cmdk (an arrow or Enter there would pick a model).
-  // Tab is let through, so the dialog's focus trap can wrap it back to the search box.
-  assert.match(panel, /onKeyDown=\{\(event\) => \{ if \(event\.key !== "Tab"\) event\.stopPropagation\(\); \}\}/);
   // Every opening starts the list's highlight on the current model (the panel stays mounted between openings).
   assert.match(panel, /useEffect\(\(\) => \{ if \(props\.open\) setHighlight\(props\.shown\.model \?\? DEFAULT_VALUE\); \}, \[props\.open, props\.shown\.model\]\)/);
   // Wide screen: the Model Selector dialog; narrow: a drawer.  Both carry a title for a screen reader.
