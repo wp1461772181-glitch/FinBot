@@ -5,3 +5,5 @@ export declare function taskState(task: Record<string, any>, enabled?: boolean):
 export declare function tasksOfBot<T extends { bot_id: string | null }>(tasks: T[] | null | undefined, botId: string): T[];
 export declare function runsOfBot<T extends { task_id: string }>(runs: T[] | null | undefined, tasks: Array<{ id: string; bot_id: string | null }> | null | undefined, botId: string): T[];
 export declare function botFilter(value: string | null | undefined, bots: Array<{ id: string }> | null | undefined): string;
+export function workStatusKind(status: string): "success" | "failure" | "progress" | "neutral";
+export function workWhen(item: { status: string; started_local: string | null; ended_local: string | null; next_run_local: string | null }, t?: (text: string) => string): string;

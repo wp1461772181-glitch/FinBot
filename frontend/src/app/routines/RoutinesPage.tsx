@@ -15,17 +15,18 @@ import { botFilter, tasksOfBot } from "../../routine-view.mjs";
 import { BotFilter } from "./BotFilter";
 import { ConfirmTab } from "./ConfirmTab";
 import { RunsPane } from "./RunsPane";
+import { WorkPane } from "./WorkPane";
 import { NewTaskButton, TasksList } from "./TasksList";
 import { TaskDrawer } from "./TaskDrawer";
 import { useRoutinesData } from "./use-routines";
 import { useTaskActions } from "./use-task-actions";
 
-type Tab = "confirm" | "tasks" | "runs";
+type Tab = "confirm" | "tasks" | "runs" | "work";
 /** The tab an address without ?tab= opens: 待你确认, the first one and the one the sidebar's number points at (a fixed default: the page does not jump when the lists arrive). */
 const DEFAULT_TAB: Tab = "confirm";
 
 /**
- * 任务 (#/routines, design 4.10): three tabs in the address (?tab=confirm|tasks|runs; the company page's tab list: manual activation, Enter or Space opens the one in focus).  待你确认 holds what waits for a press (the same two lists and the same count,
+ * 任务 (#/routines, design 4.10): four tabs in the address (?tab=confirm|tasks|runs|work, the last 手上的事 of design 4.8; the company page's tab list: manual activation, Enter or Space opens the one in focus).  待你确认 holds what waits for a press (the same two lists and the same count,
  * routinesBadge, as the sidebar's number), 全部任务 the task cards with the switch, 运行记录 the last runs; ?bot= narrows the last two to one bot.  New and edit are one
  * side drawer.  Every request is the old page's: the lists, PATCH / DELETE of a task, the inbox presses.
  */
@@ -109,6 +110,7 @@ export function RoutinesPage() {
       { value: "confirm", testId: "tab-confirm", label: <span className="inline-flex items-center gap-1.5">{t("待你确认")}{count > 0 && <span data-testid="tab-confirm-count" className="rounded-full bg-action-soft px-1.5 font-mono text-caption text-action">{count}</span>}</span> },
       { value: "tasks", testId: "tab-tasks", label: t("全部任务") },
       { value: "runs", testId: "tab-runs", label: t("运行记录") },
+      { value: "work", testId: "tab-work", label: t("手上的事") },
     ]}>
       {tab === "confirm" && <ConfirmTab entries={entries} bots={bots} busy={busy} onPress={press} loading={data.proposals.loading || data.confirms.loading} error={confirmError}
         onRetry={() => { void data.proposals.reload(); void data.confirms.reload(); }} />}
@@ -121,6 +123,7 @@ export function RoutinesPage() {
         <BotFilter bots={bots} value={filter} onChange={botId => setQuery({ bot: botId })} />
         <RunsPane runs={data.runs.data} error={data.runs.error} loading={data.runs.loading} onRetry={() => void data.runs.reload()} />
       </div>}
+      {tab === "work" && <WorkPane />}
     </CompanyTabs>
     <TaskDrawer open={drawer.open} onOpenChange={open => setDrawer(current => ({ ...current, open }))} task={drawer.task} bots={bots} defaultBotId={defaultBotId} returnFocus={returnFocus}
       onSaved={() => void after()} />

@@ -1,5 +1,5 @@
 export type CompanyTab = "overview" | "forecasts" | "materials";
-export type RoutineTab = "confirm" | "tasks" | "runs";
+export type RoutineTab = "confirm" | "tasks" | "runs" | "work";
 export type SourceType = "official_filing" | "uploaded_media";
 export type SettingsSection = "models" | "notifications" | "appearance" | "data" | "account";
 export type AssistantSection = "bots" | "skills" | "memory" | "news" | "knowledge";

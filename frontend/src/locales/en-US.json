@@ -2774,5 +2774,14 @@
   "思考深度不用选：它按每个问题自己决定，从浅到深。": "No need to pick how hard it thinks: it decides for each question, from light to deep.",
   "思考深度不用设置：它按每个问题自己决定，从浅到深。": "No need to set how hard it thinks: it decides for each question, from light to deep.",
   "快速切换模型": "Switch model",
-  "↑↓ 选择　↵ 确认": "↑↓ choose   ↵ confirm"
+  "↑↓ 选择　↵ 确认": "↑↓ choose   ↵ confirm",
+  "手上的事": "On hand",
+  "开始于 {time}": "Started {time}",
+  "下次 {time}": "Next {time}",
+  "{time} 结束": "Ended {time}",
+  "它正在做的、等着做的和最近一天做完的事。也可以在对话里直接问「你手上有什么事」。": "What it is doing, what is waiting, and what it finished in the last day. You can also ask in a chat what it has on hand.",
+  "现在手上没有事。": "Nothing on hand right now.",
+  "它在回答、跑例行任务或处理你交办的事时，会列在这里。": "Answers in progress, routines and work you handed over show up here.",
+  "登录个人聊天后才能查看手上的事。": "Sign in to your personal chat to see what is on hand.",
+  "手上的事暂时无法读取。": "What is on hand cannot be read right now."
 }

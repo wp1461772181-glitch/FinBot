@@ -655,3 +655,18 @@ def test_a_cancel_during_start_turn_leaves_no_running_row(stream_fixture, outbox
             await asyncio.gather(pending, return_exceptions=True)
     _run(hand())
     assert _only_item(cid_t2).status == "stopped"
+
+
+def test_the_web_reads_the_same_list_owner_only(monkeypatch):
+    """手上的事 on the web (GET /agent-chat/work) is the list the kernel's list_work reads; a guest gets 403."""
+    from fastapi.testclient import TestClient
+    from app import work_api
+    from app.main import app as api
+    seen = []
+    monkeypatch.setattr(work_api, "_owner_only", lambda credential: (_ for _ in ()).throw(stream.HTTPException(403, "owner_only")) if credential != CRED else credential)
+    monkeypatch.setattr(work_api, "owner_hash", lambda credential: OWNER)
+    monkeypatch.setattr(work, "list_for", lambda owner: seen.append(owner) or [{"kind": "chat", "id": "t1", "title": "回答：x", "status": "running"}])
+    client = TestClient(api)
+    assert client.get("/agent-chat/work", headers={"X-Chat-Session": "g" * 40}).status_code == 403
+    answer = client.get("/agent-chat/work", headers={"X-Chat-Session": CRED})
+    assert answer.status_code == 200 and answer.json() == {"items": [{"kind": "chat", "id": "t1", "title": "回答：x", "status": "running"}]} and seen == [OWNER]
