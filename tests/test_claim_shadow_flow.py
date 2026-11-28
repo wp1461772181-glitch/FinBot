@@ -22,6 +22,7 @@ from app.agent_workflow.claim_shadow import (
     set_test_judge_fn,
     set_test_resolve_fn,
 )
+from app.agent_workflow import claim_shadow
 from app.agent_workflow.graph import _direct_agent_turn
 
 
@@ -145,13 +146,9 @@ def test_direct_agent_turn_identical_output_and_check_text_kept_within_cap(monke
                 assert res["audit"] == direct_result["audit"]
                 assert "shadow" not in res["audit"]  # No new keys in audit
 
-                # But the file on disk MUST have the full text sent to judge
-                files = list(tmp_path.glob("[0-9]*.jsonl"))
-                assert len(files) == 1
-                record = json.loads(files[0].read_text(encoding="utf-8").splitlines()[0])
-                assert record["outcome"] == "judged"
-                assert record["counted"] is True
-                assert "very long checking text" in record["sources"]["1"]["text_sent"]
+                # 11-28: the judge is retired; no answer goes to it, whatever CLAIM_JUDGE_SHADOW says
+                assert list(tmp_path.glob("[0-9]*.jsonl")) == []
+                assert "judge_schedule" not in res["audit"]
 
     asyncio.run(_run())
 
@@ -533,7 +530,7 @@ def test_real_catalog_resolve_import_regression(monkeypatch, tmp_path: Path):
         with patch("app.kernel.loop.run_turn", AsyncMock(return_value=dict(direct_result))):
             with patch("app.agent_workflow.graph.get_stream_writer") as mock_writer:
                 mock_writer.return_value = MagicMock()
-                await _direct_agent_turn(state, runtime)
+                claim_shadow.maybe_schedule(dict(direct_result), runtime.context, state)   # the module on its own: the turn no longer calls it
 
                 if _TASKS:
                     await asyncio.gather(*list(_TASKS))
