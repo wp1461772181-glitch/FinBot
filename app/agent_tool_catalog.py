@@ -85,8 +85,16 @@ class InitializeArgs(SymbolArgs):
     days:int=Field(default=366,ge=1,le=3660)
 class ScanArgs(SymbolArgs):
     days:int|None=Field(default=None,ge=1,le=3650,description='Calendar days of history to backfill; omit for the incremental scan since the last saved watermark.')
+# The pages open_page names, each with the address it opens (the web's own routes, frontend/src/routes.mjs; agent-client-actions.mjs and
+# WorkspaceLayout.tsx know the same names).  The first nine are the old engine's; the rest came with the kernel (11-28, design 4.2: the
+# settings it never fills, a key or a token, it can still open for him).
+PAGE_PATHS={'overview':'/research','predictions':'/research/forecasts','materials':'/research/materials','sec':'/research/evidence',
+            'revisions':'/research/forecasts','evaluation':'/research/scores','agent':'/chat','knowledge':'/assistant/knowledge','memory':'/assistant/memory',
+            'settings_models':'/settings/models','settings_notifications':'/settings/notifications','settings_appearance':'/settings/appearance',
+            'settings_data':'/settings/data','settings_account':'/settings/account','routines':'/routines','work':'/routines?tab=work',
+            'portfolio':'/portfolio','bots':'/assistant/bots','skills':'/assistant/skills','news':'/assistant/news','backstage':'/backstage'}
 class PageArgs(Args):
-    page:Literal['overview','predictions','materials','sec','revisions','evaluation','agent','knowledge','memory']
+    page:Literal[tuple(PAGE_PATHS)]=Field(description="settings_models: models and their keys; settings_notifications: where messages go (Telegram, WeChat); settings_account: login; routines / work: tasks, 手上的事; portfolio: holdings; bots, skills, news, knowledge, memory: the assistant's pages; backstage: the records.")
 class StockArgs(SymbolArgs):pass
 class CardArgs(Args):
     question:str=Field(min_length=1,max_length=400)
@@ -453,7 +461,7 @@ EXTRA=(
  ('add_to_research_queue',QueueArgs,'reversible','Add a requested symbol: owner database requires server confirmation; guest browser-local queue needs no server write.'),
  ('remove_from_research_queue',QueueArgs,'reversible','Remove a requested symbol, keeping materials and history. Owner database requires server confirmation; guest browser-local only.'),
  ('select_stock',StockArgs,'client','Select the current stock in the browser without fetching new data.'),
- ('open_page',PageArgs,'client','Open a named existing workspace page without changing data.'),
+ ('open_page',PageArgs,'client',"Open a page of the web app for the owner without changing anything: on the web it opens; on Telegram or WeChat give him the link the result carries. Use it for what only he may do himself: a model key, a login, a Telegram or WeChat binding — you never fill those, and he should not paste them into the chat; open the page and tell him what to put where."),
  ('ask_user',CardArgs,'card','Ask for a missing entity or let the user choose between options. Use when the reference is ambiguous.'),
  ('use_result_set',ExistingArgs,'card','Select exact one-based positions from a returned result set, then summarize them (for a set from an earlier turn: results returned in this turn are already numbered evidence, so cite their [n]) or propose a confirmed import/analyze/index.'),
  ('fetch_sec',FilingWriteArgs,'costly','Propose fetching a saved SEC filing original. Server confirmation required; optional accession or latest form.'),

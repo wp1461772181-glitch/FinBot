@@ -1,7 +1,17 @@
 const memorySeen = new WeakMap();
 const actions = new Set(['queue_add','queue_remove','queue_sync','show_queue','select_stock','open_page']);
 const ticker = /^[A-Z]{1,5}(?:\.[A-Z]{1,2})?$/;
-const pages = new Set(['overview','predictions','materials','sec','revisions','evaluation','agent','knowledge','memory']);
+// The pages the assistant's open_page names (the server's PAGE_PATHS in app/agent_tool_catalog.py holds the same table): the old engine's
+// nine open through the workspace's old-address list; the rest (11-28) open their own address.
+export const PAGE_PATHS = {
+  overview: '/research', predictions: '/research/forecasts', materials: '/research/materials', sec: '/research/evidence', revisions: '/research/forecasts',
+  evaluation: '/research/scores', agent: '/chat', knowledge: '/assistant/knowledge', memory: '/assistant/memory',
+  settings_models: '/settings/models', settings_notifications: '/settings/notifications', settings_appearance: '/settings/appearance',
+  settings_data: '/settings/data', settings_account: '/settings/account', routines: '/routines', work: '/routines?tab=work',
+  portfolio: '/portfolio', bots: '/assistant/bots', skills: '/assistant/skills', news: '/assistant/news', backstage: '/backstage',
+};
+export const OLD_PAGES = new Set(['overview','predictions','materials','sec','revisions','evaluation','agent','knowledge','memory']);
+const pages = new Set(Object.keys(PAGE_PATHS));
 export function dispatchAgentAction(data, host = globalThis) {
   if (!data || typeof data.id !== 'string' || !/^[a-f0-9-]{36}$/.test(data.id) || !actions.has(data.action)) return false;
   if (['queue_add','queue_remove','select_stock'].includes(data.action) && !ticker.test(data.symbol ?? '')) return false;
