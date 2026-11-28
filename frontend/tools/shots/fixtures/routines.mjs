@@ -56,3 +56,13 @@ export const EXTRA_INBOX = [
     confirmation_state: "pending_confirm", action_token: "fixture-ref-2", short_code: "C3D4", actions: [{ id: "confirm", label: "确认", kind: "primary" }, { id: "skip", label: "跳过", kind: "secondary" }, { id: "later", label: "稍后", kind: "secondary" }],
     task_id: TASKS[1].id, bot_id: BOT.applebot, posted: false, conversation_id: CONVERSATION.applebot, status: "unread", created_at: minutesAgo(120) },
 ];
+
+// 手上的事 (GET /agent-chat/work, 11-28): one of each state, as work.list_for gives them.
+const item = (kind, n, title, status, status_label, fields = {}) => ({ kind, id: `w${n}`, title, status, status_label, started_at: null, started_local: null, ended_at: null, ended_local: null,
+  next_run_at: null, next_run_local: null, failure: null, conversation_id: null, ...fields });
+export const WORK = [
+  item("chat", 1, "回答：英伟达未来两年数据中心的增长前景（深度研究）", "running", "进行中", { started_local: "11-28 16:02", conversation_id: CONVERSATION.newsbot }),
+  item("routine", 2, "例行任务：盘前新闻速览", "queued", "排队中", { next_run_local: "11-29 08:30" }),
+  item("job", 3, "预测 AAPL", "done", "完成", { started_local: "11-28 14:10", ended_local: "11-28 14:12", conversation_id: CONVERSATION.applebot }),
+  item("chat", 4, "回答：美光的委托书要表决哪些提案", "failed", "失败", { started_local: "11-28 11:40", ended_local: "11-28 11:44", failure: "超过 20 分钟还没答完，已经停下" }),
+];
