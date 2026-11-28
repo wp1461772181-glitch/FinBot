@@ -5,7 +5,9 @@ turn's own ``[n]`` list as it is read (by ``toolrun``, exactly as in a turn) and
 no inbox of its own; it takes the model calls and the tool steps of the loop itself (``_call_model``, ``run_step_tools``) and adds nothing to
 them but its caps and its way of ending.  Nothing of its text reaches the client: only its tool steps, as narration lines.
 
-Behind the switch ``FINBOT_HELPER`` (``on``; off by default: nothing about a turn changes).  Never offered to a wake turn, never inside a helper.
+Behind the switch ``FINBOT_HELPER``: on by default since 11-28 (design 4.6: measured with the ruler first, 86 + 2 turns in the shadow with it on, no
+change; the model did not delegate once, so its own work is not measured yet); ``off`` takes it away and nothing about a turn changes.  Never
+offered to a wake turn, never inside a helper.
 """
 from __future__ import annotations
 
@@ -63,7 +65,7 @@ DELEGATE_SCHEMA: dict = {
 
 
 def enabled() -> bool:
-    return os.environ.get("FINBOT_HELPER", "off").strip().lower() == "on"
+    return os.environ.get("FINBOT_HELPER", "on").strip().lower() != "off"
 
 
 def offered(names) -> bool:
