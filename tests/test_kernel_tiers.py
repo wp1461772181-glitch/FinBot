@@ -308,3 +308,46 @@ def test_an_opened_page_is_not_a_source_and_a_guest_is_not_offered_it(env):
     guest = script(env, [step(text="好")])
     run(context=make_context(executor=None))
     assert "open_page" not in guest.calls[0]["tools"]
+
+
+# --- where a turn starts (11-28, owner: 「改成可配置，默认 mid」) ------------------------------------------------------------------
+
+def test_the_start_tier_setting(monkeypatch):
+    for value, top, expected in (("", "max", "mid"), ("low", "max", "low"), ("high", "max", "high"), ("max", "max", "mid"),
+                                 ("bogus", "max", "mid"), ("high", "mid", "mid"), ("", "low", "low")):
+        monkeypatch.setenv("FINBOT_KERNEL_START_TIER", value)
+        assert tiers.start_tier(top) == expected, (value, top)
+
+
+def test_by_default_a_turn_starts_mid_and_its_lookups_stay_at_its_tier(env):
+    """A mid start is not 'gone up': no quiet low try after a lookup (that was for a turn that escalated), no extra call."""
+    env.monkeypatch.delenv("FINBOT_KERNEL_START_TIER", raising=False)
+    env.monkeypatch.delenv("FINBOT_KERNEL_LOOKUP_TIER", raising=False)
+    fake = script(env, [step(calls=[call("c1", "query_financials", {"symbol": "AAPL"})]), step(text="好")])
+    result, _ = run(context=make_context())
+    assert _efforts(fake) == ["medium", "medium"]
+    assert result["audit"]["tier"] == "mid" and result["audit"]["escalated"] is False
+
+
+def test_from_a_mid_start_escalating_to_high_brings_the_low_lookups_back(env):
+    env.monkeypatch.delenv("FINBOT_KERNEL_START_TIER", raising=False)
+    env.monkeypatch.delenv("FINBOT_KERNEL_LOOKUP_TIER", raising=False)
+    fake = script(env, [step(calls=[call("c1", "escalate", {"depth": "high"})]), step(calls=[call("c2", "query_financials", {"symbol": "AAPL"})]),
+                        step(calls=[call("c3", "query_market_quote", {"symbol": "AAPL"})]), step(text="好"), step(text="好")])
+    result, _ = run(context=make_context())
+    assert _efforts(fake) == ["medium", "high", "low", "low", "high"]      # the low try that wants to conclude is redone high
+    assert result["audit"]["escalated"] is True
+
+
+def test_escalating_to_the_tier_it_is_already_at_says_so(env):
+    env.monkeypatch.delenv("FINBOT_KERNEL_START_TIER", raising=False)
+    fake = script(env, [step(calls=[call("c1", "escalate", {"depth": "mid"})]), step(text="好")])
+    run(context=make_context())
+    assert tool_message(fake, 1) == {"ok": True, "tier": "mid", "note": "这一轮已经在 mid 档，请继续。"}
+
+
+def test_a_guest_starts_mid_too_and_a_helper_and_a_wake_turn_stay_low():
+    import inspect
+    from app.kernel import helper
+    assert 'tier="low"' in inspect.getsource(helper)            # a helper's brief is a lookup
+    assert "start_tier" not in inspect.getsource(loop.run_wake)  # the frequent background check keeps starting low

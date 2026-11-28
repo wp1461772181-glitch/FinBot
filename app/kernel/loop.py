@@ -88,6 +88,7 @@ class _Run:
     question: str = ""      # this turn's user message, as typed
     turn_id: str = ""
     tier: str = "low"
+    start_tier: str = "low"            # where the turn began (``tiers.start_tier``); "gone up" means above it
     permission_mode: str | None = None
     typed_this_turn: str = ""
     outside_in_prompt: bool = False    # outside text came in without a read (a latest-known block, a skill): see act._runs_at_once
@@ -334,7 +335,7 @@ def _lookup_tier_now(run: _Run) -> str | None:
     looked things up (not the step after ``escalate``: the higher tier makes its own first move, its plan), and never right after the
     owner spoke (what he said is the turn's tier to weigh)."""
     lookup = tiers.lookup_tier()
-    if lookup is None or run.is_helper or TIERS_INDEX[lookup] >= TIERS_INDEX[run.tier]:
+    if lookup is None or run.is_helper or TIERS_INDEX[lookup] >= TIERS_INDEX[run.tier] or TIERS_INDEX[run.tier] <= TIERS_INDEX[run.start_tier]:
         return None
     if run.audit.get("lookup_redone"):
         # One dropped try says the lookup tier misjudges this turn (it wanted to conclude while the turn's tier went on looking):
@@ -396,7 +397,7 @@ def _result(run: _Run, answer: str, stop_reason: str | None, failure: str | None
         run.audit.setdefault("write_outcome", "proposed")     # a press's own outcome (executed, failed) stays the turn's word
     run.audit["stop_reason"] = stop_reason
     run.audit["tier"] = run.tier
-    run.audit["escalated"] = run.tier != "low"
+    run.audit["escalated"] = run.tier != run.start_tier
     run.audit["terminal_status"] = status
     run.audit["writes"] = run.writes
     return {"answer": answer, "citations": run.citations, "status": status,
@@ -699,6 +700,7 @@ async def _run_turn(question: str, context, emit, messages: list[dict] | None = 
                question=question, turn_id=str(state.get("turn_id") or ""), inbox=getattr(context, "inbox", None),
                carried_sets=[x for x in state.get("result_sets") or [] if isinstance(x, dict) and x.get("owner") == context.owner_hash
                              and x.get("conversation") == context.conversation_id and isinstance(x.get("rows"), list)][-MAX_SETS:])
+    run.tier = run.start_tier = tiers.start_tier(run.ceiling)
     async with progress_watchdog(IDLE_SECONDS), provider.decision_session(context.base_url):
         fact = None
         if pressed:
