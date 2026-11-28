@@ -46,7 +46,7 @@ def test_the_servers_top_tier_is_the_only_ceiling(env):
     result, _ = run(context=make_context(reasoning_effort="high"))
     assert fake.calls[1]["kwargs"]["reasoning_effort"] == "medium"
     assert result["audit"]["tier"] == "mid"
-    assert tool_message(fake, 1)["note"] == "服务器设置的上限是 mid 档，已按 mid 档继续。"
+    assert tool_message(fake, 1)["note"] == "服务器设置的上限是 mid 档，已按 mid 档继续。之后只是查资料的步骤按 low 档跑，判断和写回答都在 mid 档。"
 
 
 @pytest.mark.parametrize("args", [{"depth": "low"}, {"depth": "ultra"}, {}, "not json"])
