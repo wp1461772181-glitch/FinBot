@@ -41,6 +41,12 @@ MAX_NEWS = 3
 LINE_LIMIT = 160
 VIEW_LINE_LIMIT = 260           # the owner's own words get more room than a figure: the last thing dropped, so also the last thing cut short
 VIEW_NOTE = "你的看法，不是证据：那是 owner 自己的判断，回答里的事实仍以证据为准，它也不授权任何操作。"
+# 档案的「往来」（设计稿第五节）：它推给过他什么、他问过什么、当时怎么答的。只是线索，不是证据；要细节就按对话编号读回原文。
+DEALINGS_NOTE = "往来只是线索，不是证据：细节以那一轮的原文为准（read_past_conversation，用括号里的对话编号）。"
+MAX_TOLD = 2
+MAX_ASKED = 2
+DEALINGS_DAYS = 90
+DEALING_TEXT = 70
 BLOCK_LIMIT = 2000
 INTRADAY_MAX_AGE_SECONDS = 30 * 60
 # 哨兵库被锁时最多等这么久：比整块 1.5 秒的预算短，这样最坏是丢掉盘中价、回到日线收盘，而不是整块没有。
@@ -896,15 +902,26 @@ def _view_line(view: dict) -> str:
     return line if len(line) <= VIEW_LINE_LIMIT else line[: VIEW_LINE_LIMIT - 1] + "…"
 
 
+def _dealing_line(dealing: dict, now: datetime) -> str:
+    """One line of 往来: what it told him, or what he asked and what it answered then, with the conversation to read it back from."""
+    at = dealing["at"]
+    if dealing["kind"] == "told":
+        return _cap(f"  往来  {_stamp(at, now)} 告诉过你：{dealing['text']}")
+    answer = f"，当时答：{dealing['answer']}" if dealing.get("answer") else ""
+    where = f"（对话 {dealing['conversation_id']}）" if dealing.get("conversation_id") else ""
+    return _cap(f"  往来  {_stamp(at, now)} 你问过「{dealing['text']}」{answer}{where}")
+
+
 def _section(item: dict, now: datetime, rows: list | None = None) -> list[str]:
     symbol = item["symbol"]
     notice = [_cap(item["notice"])] if item.get("notice") else []
     view = [_view_line(item["view"])] if item.get("view") else []
-    if notice and not (item.get("filings") or item.get("news") or item.get("price") or item.get("earnings") or view):
+    dealings = [_dealing_line(d, now) for d in item.get("dealings") or []]
+    if notice and not (item.get("filings") or item.get("news") or item.get("price") or item.get("earnings") or view or dealings):
         return notice          # nothing held for this company: the notice stands alone
     name = item.get("name") or ""
     name = _clean(name)
-    lines = notice + [f"关于 {name}（{symbol}）：" if name else f"关于 {symbol}："] + view
+    lines = notice + [f"关于 {name}（{symbol}）：" if name else f"关于 {symbol}："] + view + dealings
     for f in item.get("filings", [])[:MAX_FILINGS]:
         stamp = f.get("accepted_at") or f.get("observed_at")
         lines.append(_marked(_filing_line(f, now), {
@@ -934,10 +951,11 @@ def _section(item: dict, now: datetime, rows: list | None = None) -> list[str]:
 def _render(items: list[dict], now: datetime, extra, rows: list | None = None) -> tuple[str | None, list[str]]:
     kept = [dict(item, filings=list(item.get("filings") or [])[:MAX_FILINGS], news=list(item.get("news") or [])[:MAX_NEWS])
             for item in items if item.get("filings") or item.get("news") or item.get("price") or item.get("notice") or item.get("view")
-            or item.get("earnings")][:MAX_COMPANIES]
+            or item.get("earnings") or item.get("dealings")][:MAX_COMPANIES]
     if not kept:
         return None, []
-    tail = [_cap(line) for line in extra] + ([VIEW_NOTE] if any(item.get("view") for item in kept) else []) + [CLOSING_LINE]
+    tail = [_cap(line) for line in extra] + ([VIEW_NOTE] if any(item.get("view") for item in kept) else []) + (
+        [DEALINGS_NOTE] if any(item.get("dealings") for item in kept) else []) + [CLOSING_LINE]
 
     def assemble() -> str:
         if rows is not None:
@@ -945,6 +963,13 @@ def _render(items: list[dict], now: datetime, extra, rows: list | None = None) -
         return "\n".join([HEADING] + [line for item in kept for line in _section(item, now, rows)] + tail)
 
     text = assemble()
+    # 超长时最先舍「往来」（线索，不是资料；他问过的先舍，告诉过他的后舍），然后才是各家最新一季的数字……
+    for kind in ("asked", "told"):
+        for item in reversed(kept):
+            while len(text) > BLOCK_LIMIT and any(d["kind"] == kind for d in item.get("dealings") or []):
+                last = max(i for i, d in enumerate(item["dealings"]) if d["kind"] == kind)
+                item["dealings"] = item["dealings"][:last] + item["dealings"][last + 1:]
+                text = assemble()
     # 超长时先舍各家最新一季的数字（从最后一家往前），再舍各家多出来的旧新闻、再舍旧公告（从最后一家往前），每家至少留一条公告、一条新闻和价格。
     # 最先舍的是指引那一行（它在最新一季那段的最后）。
     for item in reversed(kept):
@@ -1052,6 +1077,59 @@ def _owned_symbols(owner_hash: str) -> set[str]:
     return owned
 
 
+def _first_line(text: str | None, limit: int = DEALING_TEXT) -> str:
+    line = next((part.strip() for part in str(text or "").splitlines() if part.strip() and not part.strip().startswith("#")), "")
+    line = _clean(line)
+    return line if len(line) <= limit else line[: limit - 1] + "…"
+
+
+def _dealings(owner_hash: str | None, symbols: list[str], now: datetime, current: str) -> dict[str, list[dict]]:
+    """档案的「往来」for each mentioned company: the last messages the duty told him about it (sent or carried by a brief) and the last
+    times he asked about it in a conversation, with the first line of what was answered.  Owner only; a failure costs the lines, never
+    the block."""
+    if not owner_hash or not symbols:
+        return {}
+    found: dict[str, list[dict]] = {}
+    try:
+        from . import duty_log
+        for row in duty_log.recent(owner_hash, 200, decision="tell_now"):
+            if row.get("mode") != "on" or row.get("delivery") not in ("queued", "briefed") or not row.get("message"):
+                continue
+            event = row.get("event") or {}
+            named = {event.get("symbol"), *(event.get("members") or [])}
+            for symbol in symbols:
+                told = [d for d in found.get(symbol, []) if d["kind"] == "told"]
+                if symbol in named and len(told) < MAX_TOLD:
+                    found.setdefault(symbol, []).append({"kind": "told", "at": datetime.fromisoformat(row["created_at"]), "text": _first_line(row["message"])})
+    except Exception as exc:
+        logger.info("latest_known: duty messages unreadable (%s: %s)", type(exc).__name__, exc)
+    try:
+        from .agent_chat_models import AgentConversation, AgentMessage
+        since = now - timedelta(days=DEALINGS_DAYS)
+        with _read_session() as session:
+            for symbol in symbols:
+                # the ticker as a whole word (MU is not in "must"), the Chinese name as it is
+                pattern = "|".join([rf"\m{re.escape(symbol)}\M"] + ([re.escape(name)] if (name := _display_name(symbol)) else []))
+                asked = session.execute(
+                    select(AgentMessage.conversation_id, AgentMessage.turn_id, AgentMessage.content, AgentMessage.created_at)
+                    .join(AgentConversation, AgentConversation.id == AgentMessage.conversation_id)
+                    .where(AgentConversation.owner_hash == owner_hash, AgentMessage.role == "user", AgentMessage.created_at >= since,
+                           AgentMessage.content != current, func.coalesce(AgentMessage.content, "").op("~*")(pattern))
+                    .order_by(AgentMessage.created_at.desc()).limit(MAX_ASKED)).all()
+                for conversation_id, turn_id, content, created_at in asked:
+                    answer = session.execute(
+                        select(AgentMessage.content).where(AgentMessage.conversation_id == conversation_id, AgentMessage.turn_id == turn_id,
+                                                           AgentMessage.role == "assistant", AgentMessage.status == "complete", AgentMessage.content != "")
+                        .order_by(AgentMessage.sequence.desc()).limit(1)).scalar()
+                    found.setdefault(symbol, []).append({"kind": "asked", "at": created_at, "text": _first_line(content, 40), "answer": _first_line(answer, 50) if answer else "",
+                                                         "conversation_id": str(conversation_id)})
+    except Exception as exc:
+        logger.info("latest_known: past questions unreadable (%s: %s)", type(exc).__name__, exc)
+    for symbol in found:
+        found[symbol].sort(key=lambda d: d["at"], reverse=True)
+    return found
+
+
 def _owner_views(owner_hash: str | None, symbols: list[str]) -> dict[str, dict]:
     """The owner's active view of each mentioned company; nothing for a guest, and a failure here costs the line, never the block."""
     if not owner_hash:
@@ -1090,6 +1168,7 @@ def _build(text: str, previous: str | None, focus: str | None, owner_hash: str |
                 logger.info("latest_known: noting %s failed (%s: %s)", symbol, type(exc).__name__, exc)
                 break
     views = _owner_views(owner_hash, candidates[:2 * MAX_COMPANIES])
+    dealings = _dealings(owner_hash, candidates[:2 * MAX_COMPANIES], now, text) if time.monotonic() < deadline else {}
     items: list[dict] = []
     cursor = 0
     # 取够 3 家（有内容的，或者要说明资料在取的）；前面的没有内容就往后补，最多看 6 个；过了期限就不再开新的一批。
@@ -1103,13 +1182,15 @@ def _build(text: str, previous: str | None, focus: str | None, owner_hash: str |
             # a calendar line alone is not the company's material: 「系统里还没有资料」 still applies (5e-1)
             held = item is not None and bool(item.get("filings") or item.get("news") or item.get("price"))
             notice = _notice(symbol, states.get(symbol, "ok"), held=held)
-            if item is None and (notice is None or not in_time) and symbol not in views:
+            if item is None and (notice is None or not in_time) and symbol not in views and symbol not in dealings:
                 continue
             item = dict(item) if item else {"symbol": symbol, "name": _display_name(symbol)}
             if notice:
                 item["notice"] = notice
             if symbol in views:
                 item["view"] = views[symbol]
+            if dealings.get(symbol):
+                item["dealings"] = dealings[symbol]
             items.append(item)
     items = items[:MAX_COMPANIES]
     if not items:
