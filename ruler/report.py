@@ -7,6 +7,7 @@ KIND_NAMES = {
     "followup": "追问",
     "recall": "回忆细节",
     "general": "不查资料",
+    "understand": "懂你",
 }
 
 _NO_DATA = "无数据"

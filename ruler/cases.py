@@ -5,14 +5,15 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-KINDS = ("fact", "brief", "compare", "followup", "recall", "general")
+KINDS = ("fact", "brief", "compare", "followup", "recall", "general", "understand")
+_RUBRIC_MAX_LENGTH = 600
 
 _ID_PATTERN = re.compile(r"[A-Z]{1,3}[0-9]{2,3}")
 _TEXT_MAX_LENGTH = 4000
 _SUITE_VERSION = 1
 _DEFAULT_STATUS = "succeeded"
 _CASE_FIELDS = frozenset({"id", "kind", "title", "turns"})
-_TURN_FIELDS = frozenset({"text", "checks"})
+_TURN_FIELDS = frozenset({"text", "checks", "rubric"})
 _CHECK_FIELDS = frozenset({"status", "include_any", "exclude"})
 
 
@@ -27,6 +28,7 @@ class Checks:
 class Turn:
     text: str
     checks: Checks
+    rubric: str = ""      # what a good reply does here, for ``ruler.judge`` (the 懂你 cases); empty: the turn is not judged
 
 
 @dataclass(frozen=True)
@@ -103,7 +105,10 @@ def _parse_turn(raw, where: str) -> Turn:
     text = raw.get("text")
     if not isinstance(text, str) or not text.strip() or len(text) > _TEXT_MAX_LENGTH:
         raise SuiteError(f"{where}: text 必须是 1 到 {_TEXT_MAX_LENGTH} 字符的非空字符串")
-    return Turn(text, _parse_checks(raw.get("checks", {}), where))
+    rubric = raw.get("rubric", "")
+    if not isinstance(rubric, str) or len(rubric) > _RUBRIC_MAX_LENGTH:
+        raise SuiteError(f"{where}: rubric 必须是不超过 {_RUBRIC_MAX_LENGTH} 字符的字符串")
+    return Turn(text, _parse_checks(raw.get("checks", {}), where), rubric.strip())
 
 
 def _parse_checks(raw, where: str) -> Checks:
