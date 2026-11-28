@@ -271,3 +271,15 @@ def test_the_deep_note_is_said_once(env):
     assert result["audit"]["tier"] == "max"
     assert "深度研究" not in tool_message(fake, 2)["note"]
     assert sum(1 for e in events if e.get("event") == "narration" and "后台" in e.get("text", "")) == 1
+
+
+def test_a_max_step_that_runs_out_of_output_is_made_again_at_high(env):
+    """Shadow 11-28: at max the model spent all its output tokens thinking and wrote nothing, twice. The retry runs at high."""
+    from fastapi import HTTPException
+    env.monkeypatch.delenv("FINBOT_KERNEL_TOP_TIER", raising=False)
+    env.monkeypatch.setenv("FINBOT_KERNEL_LOOKUP_TIER", "same")
+    env.monkeypatch.setattr(loop, "RETRY_WAIT_SECONDS", 0)
+    fake = script(env, [step(calls=[call("c1", "escalate", {"depth": "max"})]), HTTPException(502, "provider_incomplete_response"), step(text="研究结论")])
+    result, _ = run(context=make_context())
+    assert result["answer"] == "研究结论" and _efforts(fake) == ["low", "max", "high"]
+    assert result["audit"]["deep_step_down"] == 1 and result["audit"]["tier"] == "max"

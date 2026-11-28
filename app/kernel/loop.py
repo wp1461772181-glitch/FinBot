@@ -307,6 +307,11 @@ async def _call_model(run: _Run, tool_schemas: list[dict], *, tier: str | None =
                 found = await _backup_for(run)
                 if found and (found.get("provider"), found.get("model")) != (use.provider, use.model):
                     raise
+            if tier == tiers.DEEP and _failure_code(failure) == "provider_incomplete_response":
+                # Shadow 11-28: at max the model spent all 32768 output tokens thinking, twice, and wrote nothing (300 s lost).  The
+                # same step again is made at high: the research goes on, this one step thinks less deeply.
+                tier = "high"
+                run.audit["deep_step_down"] = run.audit.get("deep_step_down", 0) + 1
             await asyncio.sleep(RETRY_WAIT_SECONDS)
             continue
         run.audit["model_calls"] += 1
