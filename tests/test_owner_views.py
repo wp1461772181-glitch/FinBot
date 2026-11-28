@@ -223,7 +223,8 @@ def test_the_text_and_quote_limits(owner):
 # ---- the operation directory and the old engine ------------------------------------------------------------------------
 
 def test_the_directory_lists_both_in_tier_one_with_their_wording():
-    assert act.TIER1[-2:] == ("record_view", "drop_view") and act.tier_of("record_view") == act.tier_of("drop_view") == 1
+    at = act.TIER1.index("record_view")      # 11-28: fetching official material follows them in tier 1
+    assert act.TIER1[at:at + 2] == ("record_view", "drop_view") and act.tier_of("record_view") == act.tier_of("drop_view") == 1
     for name in ("record_view", "drop_view"):
         assert name in act.OPERATIONS and act.SUMMARIES[name] and f"\n{name}：" in act.ACT_SCHEMA["function"]["description"]
         assert definitions()[name].level == "reversible" and name in OWNER_ONLY and name in KERNEL_ONLY
