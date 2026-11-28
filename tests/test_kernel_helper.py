@@ -35,7 +35,7 @@ GOLDEN = {
     "owner": ("23ebf3db55536d5f0df42d578c1eae53bea96980f3e1250937606e36ca4424c2",
                "8d03362697280df3da889a256265d6eaa7df03a554f0d132934487ad935ce828"),
     # 6a: a guest's system prompt gains the line about what only the owner can do (``prompt.GUEST_NOTE``); the owner's is unchanged.
-    "guest": ("9823e2086b9a5f98f3a86e9a9fa00146902edc76b43bda0c413613b7e601555e", "9996e2e50ce5374e12e6110b598bfa323db443a3697aebae0f76736e80f20d64"),
+    "guest": ("cc697baf95543b43614509bb70ea10889ed11ab173f2089dd28e703b49fdaa4d", "9996e2e50ce5374e12e6110b598bfa323db443a3697aebae0f76736e80f20d64"),
 }
 
 

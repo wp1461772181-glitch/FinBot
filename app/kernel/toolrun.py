@@ -31,14 +31,15 @@ SLOW_SECONDS = 10     # a step whose reads are still out after this long gets on
 RECEIPT_HINT = "有输入没有绑定到来源，逐项原因见 input_receipts。只需改正其中 found 为 false 的输入，其余保持不变；不要把数值改写成更长的小数去试。closest_in_source 与 bindable_values 都只是不完整的候选。"
 # Results of these tools are the model's memory, a computation, or state about the system and the owner's own lists, not
 # saved evidence: they are never numbered as rows.  The last three mirror the old engine's ``admin_tools`` (direct.py).
-_UNNUMBERED = {"recall_conversations", "read_past_conversation", "read_turn", "query_system_status", "query_research_queue", "list_routines", "list_models", "list_work", "list_watch_rules"}
+_UNNUMBERED = {"recall_conversations", "read_past_conversation", "read_turn", "query_system_status", "query_research_queue", "list_routines", "list_models", "list_work", "list_watch_rules",
+               "open_page"}      # a page opened and its link: not a source (review 11-28: it was numbered as one)
 # The pages these reads return can be saved with ``act``; a post found on X is not a web page.
 _WEB_PAGE_READS = ("web_research", "search_configured_news")
 # These return the owner's own data, not text from outside: they do not make a tier-1 write go onto a card.  The system
 # status is not one of them: job and document names and error text in it come from outside.
 # query_alerts: the sentinel's own alert lines (prices, his rules, the code's words), nothing from outside; asking which alert he means
 # before rating it (rate_alert) must not put the verdict on a card, which WeChat cannot press.
-_OWN_STATE_READS = frozenset({"query_research_queue", "list_routines", "list_models", "list_work", "list_watch_rules", "query_alerts"})
+_OWN_STATE_READS = frozenset({"query_research_queue", "list_routines", "list_models", "list_work", "list_watch_rules", "query_alerts", "open_page"})
 _SOURCE_TYPES = {"web_research": "web", "search_configured_news": "configured_news", "query_sec_filings": "official_filing",
                 "search_x": "x_post"}
 # Run one at a time after every read has been numbered, in call order: calculations work on the citations the reads just
