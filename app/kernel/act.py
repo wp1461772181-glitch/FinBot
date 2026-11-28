@@ -337,8 +337,9 @@ async def _remember(run, args: dict, operation: dict) -> dict:
         return _failure("quote_not_owners", reason=REMEMBER_HINTS["quote_not_owners"], hint=REMEMBER_HINTS["quote_not_owners"])
     if noticed:
         run.noticed_count = getattr(run, "noticed_count", 0) + 1
-        if args.get("kind") == "recent" and getattr(run, "read_results", 0):
-            operation["held"] = True       # after outside material a 近况 waits for him like any guess (11-28 security review)
+        if args.get("kind") == "recent" and (getattr(run, "read_results", 0) or getattr(run, "outside_in_prompt", False)):
+            # after outside material (read this turn, or a latest-known block or a skill's text) a 近况 waits for him like any guess
+            operation["held"] = True
     return await _remember_write(run, args, operation, quote, noticed=noticed)
 
 

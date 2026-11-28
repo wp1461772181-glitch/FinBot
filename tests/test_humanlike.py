@@ -235,3 +235,20 @@ def test_the_kernel_holds_a_recent_item_noticed_after_a_read(env, fake_consent, 
     script(env, [step(calls=[act_call("c2", "remember", {"kind": "recent", "text": "在找潜力股", "quote": "潜力股公司", "basis": "noticed"})]), step(text="好")])
     run("推荐几家没人关注的潜力股公司", context=make_context(conversation_id="conv"))
     assert fake_consent.reversible[-1][0].get("held") is None          # no outside material this turn: used at once
+
+
+def test_a_recent_item_is_held_after_a_latest_known_block_too(env, fake_consent, monkeypatch):
+    from app import permission_mode
+    from app.kernel import act, loop
+    from tests.test_kernel_loop import act_call, make_context
+    monkeypatch.setattr(permission_mode, "get", lambda owner: "default")
+    monkeypatch.setattr(act.profile, "quote_in_message", lambda quote, message: quote in (message or ""))
+    monkeypatch.setattr(act.profile, "user_message_id", lambda conversation, turn: None)
+
+    async def latest(run, *a, **k):
+        run.outside_in_prompt = True
+        return "系统最新掌握：……"
+    monkeypatch.setattr(loop, "_latest_block", latest)
+    script(env, [step(calls=[act_call("c1", "remember", {"kind": "recent", "text": "在找潜力股", "quote": "潜力股公司", "basis": "noticed"})]), step(text="好")])
+    run("推荐几家没人关注的潜力股公司", context=make_context(conversation_id="conv"))
+    assert [op.get("held") for op, _ in fake_consent.reversible] == [True]
