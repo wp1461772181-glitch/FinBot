@@ -62,7 +62,7 @@ class AgentRuntimeContext:
     bot_block: str | None = field(default=None, repr=False, compare=False)
     # The bot's own reasoning effort (agent_bots: its setting); None: the environment default (agent_chat_provider).
     reasoning_effort: str | None = None
-    # The turn engine: "v2" runs the kernel (app/kernel); None the existing turn.  Set from the bot, or FINBOT_KERNEL_DEFAULT.
+    # The turn engine: "v2" runs the kernel (app/kernel); "v1" or None the old turn.  Set by ``graph._engine``.
     engine: str | None = None
     tool_scope: frozenset | None = field(default=None, compare=False)
     # SW2 (spec-sw2 §3.1): the request-time facts for this turn's self-state block: model_label and the previous answer's check.

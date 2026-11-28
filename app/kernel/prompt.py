@@ -113,6 +113,16 @@ def _without_label(message: dict) -> dict:
     return message
 
 
+# A scheduled run (``context.unattended``) and a guest's turn are told what is different for them: what they are offered says it, the
+# prompt says why, so a refusal is not a surprise.  Both are the same text every time (one more block after the bot's, cache-stable).
+UNATTENDED_NOTE = ("这一次是他设定的定时任务在运行，没有人在看：\n"
+                   "- 没有人能回答追问（这一轮没有 ask），按任务说明尽力做完；缺的资料直接说明。\n"
+                   "- 要改他的数据、花钱或改设置的操作照样用 act 提出：它们会放进他的收件箱「待你确认」，这一轮不会执行。\n"
+                   "- 任务说明里说了有值得告诉他的就发给他时，用 notify_telegram 发；没有新东西就不要发。")
+GUEST_NOTE = ("现在和你说话的是访客，不是登录的所有者：可以查资料、回答问题；记住、记交易、建定时任务、保存资料这类操作只有所有者登录后才能做。"
+              "访客要求这些时直接说明，不要假装做了。")
+
+
 def build_messages(question: str, context, history: list[dict], *, fact: str | None = None, skill: dict | None = None,
                    latest: str | None = None, helper: bool = False) -> list[dict]:
     """System prompt (+ the bot's instruction and, for the owner only, the profile block), then the history.
@@ -131,6 +141,10 @@ def build_messages(question: str, context, history: list[dict], *, fact: str | N
     blocks = [system_text(bool(skill_block), helper), getattr(context, "bot_block", None)]
     if owner:
         blocks += [skill_block, getattr(context, "profile_block", None)]
+        if getattr(context, "unattended", False):
+            blocks.append(UNATTENDED_NOTE)
+    else:
+        blocks.append(GUEST_NOTE)
     system = "\n\n".join(block for block in blocks if block)
     body = [_without_label(dict(message)) for message in history or []]
     for message in body:      # a user's own words cannot carry the wrapper's tags
