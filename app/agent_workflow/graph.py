@@ -12,7 +12,6 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.runtime import Runtime
 
 from .state import AgentRuntimeContext, AgentWorkflowState, checkpoint_thread_id
-from .fp_flags import flag
 
 
 def _bytes(value: Any) -> int:
@@ -33,16 +32,10 @@ async def _direct_agent_turn(state: AgentWorkflowState, runtime: Runtime[AgentRu
     result = await run_kernel_turn(state.get("question", ""), runtime.context, emit=publish,
                                    messages=state.get("messages", []), state=state)
     answer = result["answer"]
-    # LLM claim judge, stage 2 (shadow): takes a snapshot and returns at once; never touches the answer.
-    judge_schedule = None
-    try:
-        from .claim_shadow import maybe_schedule
-        judge_schedule = maybe_schedule(result, runtime.context, state)
-    except Exception:
-        pass
-    # SW2 K-audit: the next turn's self-state block reads this (claim_public_wire.prior_answer_state); off: nothing is written.
-    if judge_schedule is not None and flag("FINBOT_SW2_SELF_STATE", True):
-        result.setdefault("audit", {})["judge_schedule"] = judge_schedule
+    # The LLM claim judge is retired (11-28, design 9.1: of the checking code only the figure reconciliation and the source numbers
+    # stay): the kernel's answers are reconciled after they are stored (kernel/reconcile.py, shown under 「依据」), which the judge
+    # duplicated with one more model call per answer.  No answer is sent to it whatever CLAIM_JUDGE_SHADOW says; marks it wrote
+    # on earlier answers stay as they were.
     # The turn's own checks have run.  Stored citations and result sets keep the full checking text of a source up
     # to STORED_CHECK_TEXT_CHARS: a later answer that reads the source back checks its figures against it.  Text over
     # the cap is dropped and the citation is marked evidence_incomplete, so a later reader treats a miss as insufficient.
