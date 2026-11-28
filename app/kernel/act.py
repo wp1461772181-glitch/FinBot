@@ -746,7 +746,9 @@ async def prepare(run, name: str, arguments) -> Prepared | dict:
         if "error_code" in display:
             return display
     elif name == "report_missed":
+        # where he said it, and his words as he typed them: the code keeps them, the model is not asked to copy them
         operation["conversation_id"], operation["turn_id"] = str(run.context.conversation_id or ""), getattr(run, "turn_id", "")
+        operation["quote"] = str(getattr(run, "question", "") or "")[:200]
         display = {"title": "记下漏报", "targets": [{**({"symbol": args["symbol"].upper()} if args.get("symbol") else {}), "title": args["what"]}],
                    "alternative": UNDO["report_missed"]}
     elif name in WATCH_OPERATIONS:

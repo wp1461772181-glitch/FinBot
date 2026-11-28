@@ -291,7 +291,6 @@ class RateAnswerArgs(Args):
 class ReportMissedArgs(Args):
     what:str=Field(min_length=1,max_length=200,description="What he says he was not told and should have been, in one line (英伟达 11-17 跌了 6% 没提醒我; 美光的委托书没告诉我).")
     symbol:str|None=Field(default=None,min_length=1,max_length=12,description='The stock it is about, when he names one or it is plain from the conversation.')
-    quote:str|None=Field(default=None,min_length=1,max_length=200,description='His own words of this turn, copied.')
 class WatchLevelArgs(Args):
     threshold:float|int=Field(gt=0,description='The number at which this level fires, in the unit of the metric (a percent, dollars, or a multiple).')
     level:Literal['remind','urgent']=Field(description='remind: a notice. urgent: the owner asked for it to be loud (「加急」「紧急」「一定要叫我」). At most one urgent, and it is the further level.')
