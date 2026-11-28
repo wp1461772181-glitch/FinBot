@@ -49,6 +49,8 @@ os.environ["PERSONAL_CHAT_LOGIN_PATH"] = os.path.join(
 os.environ.setdefault("MODEL_CREDENTIAL_KEY", "pytest-model-credential-key-0123456789abcdef")
 # The archive build worker could reach SEC: no test starts it through the app; its own tests switch it on with a faked build.
 os.environ["FINBOT_ARCHIVE_BUILDS"] = "off"
+# The helper is on by default in the app (11-28); the kernel's tests describe the tool list without it, and the helper's own tests turn it on.
+os.environ["FINBOT_HELPER"] = "off"
 
 # These imports must remain after DATABASE_URL is set so every application
 # module and test shares the disposable database engine.

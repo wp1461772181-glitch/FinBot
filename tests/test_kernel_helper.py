@@ -134,13 +134,10 @@ def by_symbol(env):
 
 # --- Review Focus 5: the switch off pins today's schemas and system text -------------------------------------------------------
 
-@pytest.mark.parametrize("setting", [None, "off", "OFF", "", "no"])
+@pytest.mark.parametrize("setting", ["off", "OFF"])      # 11-28: unset (and anything but off) is on
 def test_the_switch_off_leaves_schemas_and_system_text_as_they_were(env, setting):
     env.monkeypatch.setenv("FINBOT_KERNEL_INLINE_CATALOGUE", "off")     # the golden text is the one from before the inline-catalogue line
-    if setting is None:
-        env.monkeypatch.delenv("FINBOT_HELPER", raising=False)
-    else:
-        env.monkeypatch.setenv("FINBOT_HELPER", setting)
+    env.monkeypatch.setenv("FINBOT_HELPER", setting)
     for who, context in (("owner", make_context()), ("guest", guest_context())):
         schemas = loop._tool_schemas(context)
         messages = prompt.build_messages("q", context, [{"role": "user", "content": "q"}])
@@ -149,7 +146,7 @@ def test_the_switch_off_leaves_schemas_and_system_text_as_they_were(env, setting
 
 
 def test_the_switch_on_adds_the_tool_last_and_one_sentence_to_the_system_text(env):
-    env.monkeypatch.delenv("FINBOT_HELPER", raising=False)
+    env.monkeypatch.setenv("FINBOT_HELPER", "off")
     for context in (make_context(), guest_context()):
         before = loop._tool_schemas(context)
         env.monkeypatch.setenv("FINBOT_HELPER", "on")
@@ -158,11 +155,11 @@ def test_the_switch_on_adds_the_tool_last_and_one_sentence_to_the_system_text(en
         text_off = prompt.system_text()
         text_on = prompt.system_text(helper=True)
         assert text_on != text_off and prompt.HELPER_LINE in text_on and text_on.replace(prompt.HELPER_LINE + "\n", "") == text_off
-        env.monkeypatch.delenv("FINBOT_HELPER")
+        env.monkeypatch.setenv("FINBOT_HELPER", "off")
 
 
 def test_a_run_with_the_switch_off_sends_the_model_exactly_todays_schemas_and_system_text(env):
-    env.monkeypatch.delenv("FINBOT_HELPER", raising=False)
+    env.monkeypatch.setenv("FINBOT_HELPER", "off")
     model = install(env, [step(text="好")])
     run_turn()
     (sent,) = model.calls
@@ -645,3 +642,14 @@ def test_the_helper_is_given_the_read_schemas_without_say_and_item(on):
     schemas = helper.helper_schemas(loop._tool_schemas(make_context()), None)
     assert schemas and all(not {"say", "item"} & set(s["function"]["parameters"].get("properties", {})) for s in schemas)
     assert names(schemas) == [n for n in names(loop._tool_schemas(make_context())) if n not in helper.OWN_TOOLS]
+
+
+
+def test_the_app_default_is_on_and_off_takes_it_away(monkeypatch):
+    """11-28: on unless the server says off (the tests' own environment sets off, tests/conftest.py)."""
+    from app.kernel import helper
+    monkeypatch.delenv("FINBOT_HELPER", raising=False)
+    assert helper.enabled() is True
+    for value, expected in (("off", False), ("OFF", False), ("0", False), ("false", False), ("no", False), ("disabled", False), ("on", True), ("", True), ("1", True)):
+        monkeypatch.setenv("FINBOT_HELPER", value)
+        assert helper.enabled() is expected
