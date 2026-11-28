@@ -484,6 +484,9 @@ def update_item(owner_hash: str, item_id: str, fields: dict, by: memory_events.A
             row.text = text
             if text != old:
                 _event(db, row, "edited", by, before=old)
+                # What he typed is his word now: the old quote would bring back what he changed (11-28 review: a rewritten
+                # instruction kept showing 「他的原话：回答前先上网搜索」).  The edit event keeps the old text.
+                row.quote = text
         if "bot_id" in fields:
             old_bot = row.bot_id
             row.bot_id = _bot(db, owner_hash, fields["bot_id"])

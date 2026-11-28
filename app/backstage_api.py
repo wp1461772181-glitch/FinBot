@@ -756,6 +756,9 @@ def _aggregates():
             func.coalesce(func.sum(L.cost_usd), 0.0), func.count().filter(L.cost_usd.is_(None))]
 
 
+NO_ENTRY = "no_entry"
+
+
 def _usage_line(values, missing=()) -> dict:
     """``cost_usd`` sums the priced calls and is null when none was priced (never a made-up zero); ``missing_prices`` names the
     catalog prices (input, output, cache_read, cache_write) whose absence keeps this group's calls unpriced."""
@@ -814,7 +817,9 @@ def usage(x_chat_session: str | None = Header(default=None), group: str = "day",
         by_name = {item["name"]: item for item in catalog.entries()[0]} if unpriced else {}
     missing, every = {}, set()
     for name, catalog_name, read, write in unpriced:
-        found = _missing_prices(by_name.get(catalog_name), read, write)
+        # 11-28 (section 8 item 5): a call with no catalog entry (the model test before saving, the knowledge index's embedding) has no
+        # price to fill in anywhere; it is named for what it is, not sent to the settings page for a price it cannot take.
+        found = {NO_ENTRY} if catalog_name is None else _missing_prices(by_name.get(catalog_name), read, write)
         missing.setdefault(name if name is not None else "none", set()).update(found)
         every |= found
     totals = _usage_line(total_row, every)

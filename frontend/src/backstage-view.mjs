@@ -279,7 +279,9 @@ export function usageQuery({ from, to, group }) {
   return paramsOf([["from", from], ["to", to], ["group", group]]);
 }
 
-const PRICE_NAMES = { input: "输入价", output: "输出价", cache_read: "缓存读取价", cache_write: "缓存写入价" };
+const PRICE_NAMES = { input: "输入价", output: "输出价", cache_read: "缓存读取价", cache_write: "缓存写入价",
+  // 11-28: calls that belong to no model entry (the test before saving one, the knowledge index's embedding): there is nowhere to price them
+  no_entry: "不属于任何模型条目的调用（保存模型前的连接测试、知识库向量化），没有地方填价格" };
 const PURPOSES = { chat: "对话", summary: "摘要", profile: "画像", judge: "核查", forecast: "预测", earnings: "财报", material_analysis: "材料分析", news: "新闻", routine: "例行任务", duty: "值班", helper: "小助手", memory: "记忆整理", quality: "每周自检",
   query_expansion: "查询扩展", localization: "翻译", knowledge: "知识库", other: "其他" };
 

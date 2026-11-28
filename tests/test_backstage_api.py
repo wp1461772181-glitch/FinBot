@@ -1456,3 +1456,14 @@ def test_quality_carries_the_weekly_self_checks_newest_first_and_survives_an_unr
     monkeypatch.setattr(quality_review, "recent", lambda owner: (_ for _ in ()).throw(RuntimeError("table gone")))
     broken = get(client, "/backstage/quality").json()
     assert broken["weekly"] is None and broken["ruler"] == []
+
+
+def test_a_call_with_no_catalog_entry_is_named_for_what_it_is(client, monkeypatch):
+    """11-28 (humanlike plan, section 8 item 5): the model test before saving and the knowledge index's embedding have no entry to price."""
+    from app import agent_model_catalog as catalog
+    monkeypatch.setattr(catalog, "entries", lambda: ([], None))
+    cid = conversation(bot())
+    ledger(uuid.uuid4(), cid, catalog=None, cost=None, at=day(2026, 11, 2))
+    model_usage.flush()
+    body = get(client, "/backstage/usage", **{"from": "2026-11-02", "to": "2026-11-02", "group": "model"}).json()
+    assert body["totals"]["missing_prices"] == ["no_entry"]

@@ -708,7 +708,7 @@ def _since_last(owner_hash: str, conversation_id: str, turn_id: str) -> str | No
         if hours < GAP_HOURS:
             return None
         sent = int(db.scalar(select(func.count(func.distinct(func.coalesce(AgentTelegramMessage.group_id, AgentTelegramMessage.id)))).where(
-            AgentTelegramMessage.owner_hash == owner_hash, AgentTelegramMessage.created_at > last,
+            AgentTelegramMessage.owner_hash == owner_hash, AgentTelegramMessage.created_at > last, AgentTelegramMessage.status == "sent",
             AgentTelegramMessage.source.notin_(("reply", "sentinel")))) or 0)
     gap = f"{int(hours // 24)} 天" if hours >= 48 else f"{int(hours)} 小时"
     told = f"这期间你主动发给过他 {sent} 条消息（异动解读、简报这类）。" if sent else ""

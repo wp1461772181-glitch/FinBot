@@ -31,7 +31,8 @@ export function FollowUpsSection() {
       setWorking(null);
     }
   }
-  if (read.error != null && !read.data) return <ErrorBar error={read.error} onRetry={() => void read.reload()} retrying={read.loading} />;
+  // A server without this route yet (the page can be published before the API): say nothing rather than show an error.
+  if (read.error != null && !read.data) return (read.error as { status?: number }).status === 404 ? null : <ErrorBar error={read.error} onRetry={() => void read.reload()} retrying={read.loading} />;
   if (items.length === 0) return null;
   return <section data-testid="memory-follow-ups" aria-labelledby="memory-follow-ups-title" className="flex min-w-0 flex-col gap-2">
     <h2 id="memory-follow-ups-title" className="text-title-s text-ink">{t("它记着要回头看的事")}<span className="ml-2 font-mono text-caption font-normal text-muted-foreground">{items.length}</span></h2>

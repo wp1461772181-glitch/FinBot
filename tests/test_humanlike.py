@@ -281,3 +281,11 @@ def test_the_ruler_marks_its_conversations_and_the_memory_review_leaves_them_out
             db.query(AgentMessage).filter(AgentMessage.conversation_id.in_([mine, test])).delete()
             db.query(AgentConversation).filter(AgentConversation.id.in_([mine, test])).delete()
             db.commit()
+
+
+def test_an_edited_item_carries_its_new_text_as_his_words(clean_owner):
+    profile.add_item(clean_owner, kind="instruction", text="回答前先上网搜索", quote="回答前先上网搜索一下", message="以后回答前先上网搜索一下", origin="explicit")
+    item = profile.list_items(clean_owner)[0]
+    profile.update_item(clean_owner, item["id"], {"text": "涉及最新消息和行情时先联网查"})
+    block, _ = profile.render_block(clean_owner)
+    assert "涉及最新消息和行情时先联网查" in block and "上网搜索" not in block

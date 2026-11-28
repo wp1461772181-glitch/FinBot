@@ -340,7 +340,8 @@ async def _remember(run, args: dict, operation: dict) -> dict:
         return _failure("quote_not_owners", reason=REMEMBER_HINTS["quote_not_owners"], hint=REMEMBER_HINTS["quote_not_owners"])
     if noticed:
         run.noticed_count = getattr(run, "noticed_count", 0) + 1
-        if args.get("kind") == "recent" and (getattr(run, "read_results", 0) or getattr(run, "outside_in_prompt", False)):
+        if args.get("kind") == "recent" and (getattr(run, "read_results", 0) or getattr(run, "outside_in_prompt", False)
+                                             or getattr(run.context, "via", None) == "ruler"):     # a test turn's 近况 is not used at once
             # after outside material (read this turn, or a latest-known block or a skill's text) a 近况 waits for him like any guess
             operation["held"] = True
     return await _remember_write(run, args, operation, quote, noticed=noticed)
@@ -1179,6 +1180,8 @@ async def _runs_at_once(run, prepared: Prepared, go_ahead) -> bool:
       unless outside text came in without a read (a 「系统最新掌握」 block, a skill's text): then only tier 1 does."""
     if prepared.options is not None or _always_card(prepared.operation):
         return False
+    if prepared.operation.get("name") == "follow_up" and getattr(run, "outside_in_prompt", False):
+        return False         # its words come back every turn and to the duty turn: after outside text of any kind it waits on the card
     if run.read_results:
         return _direct_after_reads(run, prepared) and await _mode(run) != "ask"
     mode = await _mode(run)

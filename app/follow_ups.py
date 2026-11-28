@@ -28,6 +28,7 @@ DAILY = 1
 MIN_MINUTES = 30
 HORIZON_DAYS = 30
 EXPIRE_DAYS = 7
+MAX_ATTEMPTS = 3                # a follow-up whose wake fails or whose message cannot go out is tried again, up to this many times
 WAKING_HOURS = (8, 22)          # Beijing: a due one waits for the morning rather than waking him at night
 WHAT_MAX = 200
 ALERT_BASE = 2**41              # a follow-up's wake id: apart from the sentinel's and the missed-alert resends (selfcheck.RESEND_BASE)
@@ -49,6 +50,7 @@ class FollowUp(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC))
     fired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     outcome: Mapped[str | None] = mapped_column(String(40), nullable=True)                # the wake's decision, or why it did not run
+    attempts: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)          # each try is its own wake (its own duty row)
 
 
 def _uuid(value) -> uuid.UUID | None:
@@ -162,22 +164,42 @@ def take_due(owner_hash: str, now: datetime | None = None) -> list[dict]:
         rows = list(db.scalars(select(FollowUp).where(FollowUp.owner_hash == owner_hash, FollowUp.status == "open", FollowUp.due_at <= now)
                                .order_by(FollowUp.due_at).limit(room)))
         for row in rows:
-            row.status, row.fired_at = "fired", now
+            row.status, row.fired_at, row.attempts = "fired", now, (row.attempts or 0) + 1
         db.commit()
-        return [as_dict(r) | {"quote": r.quote} for r in rows]
+        return [as_dict(r) | {"quote": r.quote, "attempts": r.attempts} for r in rows]
 
 
-def set_outcome(follow_up_id: int, outcome: str) -> None:
+def set_outcome(follow_up_id: int, outcome: str, *, again: bool = False) -> None:
+    """The wake's outcome; ``again``: it did not run to a decision or its message did not go out, so it is open again (and does not count
+    against the day: ``fired_at`` is cleared)."""
     with SessionLocal() as db:
         row = db.get(FollowUp, int(follow_up_id))
         if row is not None:
             row.outcome = str(outcome or "")[:40]
+            if again:
+                # tried again on a later pass, with a new wake id; after MAX_ATTEMPTS it is given up (status ``failed``)
+                row.status, row.fired_at = ("open", None) if (row.attempts or 0) < MAX_ATTEMPTS else ("failed", row.fired_at)
             db.commit()
+
+
+UNSENT = ("capped", "telegram_not_bound")       # ``wake._deliver``'s reasons for not queueing a tell_now
+
+
+def _settled(row: dict | None) -> tuple[str, bool]:
+    """(the outcome to keep, whether it should be tried again): a decision stands, a tell_now that could not be queued and a wake that
+    reached no decision are tried again (the next pass; the day's allowance is left)."""
+    row = row or {}
+    if row.get("outcome") != "decided":
+        return str(row.get("outcome") or "failed"), True
+    if row.get("decision") == "tell_now" and row.get("delivery") in UNSENT:
+        return f"tell_now:{row['delivery']}", True
+    return str(row.get("decision") or ""), False
 
 
 def wake_event(item: dict) -> dict:
     """The duty turn's event of one follow-up (``kernel.wake``): kind ``follow_up``, its own words as data."""
-    return {"alert_id": ALERT_BASE + int(item["id"]), "symbol": item.get("symbol") or "—", "kind": "follow_up",
+    # One wake id per try (the duty turn judges an id once): id * 16 + the try number.
+    return {"alert_id": ALERT_BASE + int(item["id"]) * 16 + int(item.get("attempts") or 1), "symbol": item.get("symbol") or "—", "kind": "follow_up",
             "text": f"【跟进】{item['what']}", "follow_up": {"what": item["what"], "said_on": (item.get("created_at") or "")[:10],
                                                         "due": item["due_label"], "his_words_then": (item.get("quote") or "")[:300]}}
 
@@ -191,9 +213,10 @@ def run_due(owner_hash: str, now: datetime | None = None) -> list[dict]:
     for item in take_due(owner_hash, now):
         try:
             row = asyncio.run(wake.wake(wake_event(item), owner_hash=owner_hash))
-            set_outcome(item["id"], (row or {}).get("decision") or (row or {}).get("outcome") or "")
+            outcome, again = _settled(row)
+            set_outcome(item["id"], outcome, again=again)
             judged.append(row)
         except Exception:
             log.exception("follow-up %s could not be judged", item["id"])
-            set_outcome(item["id"], "failed")
+            set_outcome(item["id"], "failed", again=True)
     return judged

@@ -2803,5 +2803,6 @@
   "它记着要回头看的事": "Things it will look at again",
   "已取消，它不会再回来看这件事。": "Cancelled. It will not come back to this.",
   "取消失败，请重试。": "Couldn't cancel. Please try again.",
-  "它在对话里答应过回头再看的事。到时间它会去查，有新东西才告诉你；一天最多一条，夜里不打扰。": "Things it promised in a chat to look at again. When the time comes it checks and tells you only if there is something new: at most one a day, never at night."
+  "它在对话里答应过回头再看的事。到时间它会去查，有新东西才告诉你；一天最多一条，夜里不打扰。": "Things it promised in a chat to look at again. When the time comes it checks and tells you only if there is something new: at most one a day, never at night.",
+  "不属于任何模型条目的调用（保存模型前的连接测试、知识库向量化），没有地方填价格": "calls that belong to no model entry (the test before saving one, the knowledge index's embedding), so there is nowhere to price them"
 }

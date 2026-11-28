@@ -78,7 +78,7 @@ export function ProfilePanel({ onChanged }: { onChanged?: () => void } = {}) {
             onKeyDown={event => { if (event.nativeEvent.isComposing) return; if (event.key === "Enter") { event.preventDefault(); void saveEdit(); } if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setEditing(null); } }} />}
           {templateNote(item, locale)
             ? <p data-testid="memory-template-note" className="m-0 text-small text-muted-foreground">{templateNote(item, locale)?.line}</p>
-            : item.quote?.trim() && <blockquote data-testid="memory-quote" className="material-fact m-0 px-3 py-2 font-quote text-small text-ink">“{item.quote}”</blockquote>}
+            : item.quote?.trim() && item.quote.trim() !== item.text.trim() && <blockquote data-testid="memory-quote" className="material-fact m-0 px-3 py-2 font-quote text-small text-ink">“{item.quote}”</blockquote>}
           {seenLine(item, locale) && <p data-testid="memory-seen" className="m-0 font-mono text-caption text-muted-foreground">{t(seenLine(item, locale))}</p>}
           <div className="flex flex-wrap items-center gap-2">
             <Select value={item.bot_id ?? GLOBAL} disabled={busy === item.id} onValueChange={value => { const target = value === GLOBAL ? null : value; void run(item.id, () => updateProfileItem(item.id, { bot_id: target })); }}>

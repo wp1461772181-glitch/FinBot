@@ -101,6 +101,9 @@ def _facts(owner: str, event: dict) -> tuple[dict, list[dict], list[dict], list[
                 "in_research_queue": None, "research_queue": []}
     # a night-held alert (deferred) has not reached him yet, nor has a missed one sent again by the morning check
     relation["already_sent"] = not bool(event.get("deferred")) and event.get("kind") != "missed"
+    if event.get("kind") == "follow_up":
+        relation.pop("already_sent")
+        relation["no_alert"] = True       # its own promise: no sentinel alert went out for it (the follow-up section of the prompt)
     tier = event.get("tier")
     if isinstance(tier, int) and not isinstance(tier, bool) and tier in TIER_LABELS:
         relation["tier_label"] = TIER_LABELS[tier]      # only the two tiers that ask for a cause; no key otherwise

@@ -74,7 +74,7 @@ def test_a_due_one_goes_to_the_duty_turn_as_data(table, monkeypatch):
     monkeypatch.setattr(kernel_wake, "wake", wake)
     follow_ups.run_due(OWNER, NOW + timedelta(hours=2))
     (event, owner), = seen
-    assert owner == OWNER and event["kind"] == "follow_up" and event["alert_id"] == follow_ups.ALERT_BASE + item["id"]
+    assert owner == OWNER and event["kind"] == "follow_up" and event["alert_id"] == follow_ups.ALERT_BASE + item["id"] * 16 + 1
     assert event["text"] == "【跟进】看 ARDT 财报后的反应" and event["follow_up"]["his_words_then"] == "第二家公司我感觉有点意思"
     from app.kernel.wake import clean_event
     assert clean_event(event)["kind"] == "follow_up"
@@ -148,3 +148,54 @@ def test_the_time_since_his_last_message(disposable_database, monkeypatch):
         db.query(AgentMessage).filter(AgentMessage.turn_id == earlier).update({"created_at": datetime.now(UTC) - timedelta(hours=1)})
         db.commit()
     assert loop._since_last(OWNER, str(conversation), str(now_turn)) is None
+
+
+def test_a_follow_up_that_did_not_reach_him_is_tried_again_with_a_new_wake_id_then_given_up(table, monkeypatch):
+    item = follow_ups.add(OWNER, "看英伟达新 CEO", NOW + timedelta(hours=1), now=NOW)
+    seen = []
+
+    async def wake(event, *, owner_hash):
+        seen.append(event["alert_id"])
+        return {"outcome": "decided", "decision": "tell_now", "delivery": "capped"}
+    from app.kernel import wake as kernel_wake
+    monkeypatch.setattr(kernel_wake, "wake", wake)
+    later = NOW + timedelta(hours=2)
+    for day in range(4):
+        follow_ups.run_due(OWNER, later + timedelta(days=day))
+    assert seen == [follow_ups.ALERT_BASE + item["id"] * 16 + n for n in (1, 2, 3)]       # each try its own id; three tries, then given up
+    with SessionLocal() as db:
+        row = db.get(follow_ups.FollowUp, item["id"])
+        assert row.status == "failed" and row.outcome == "tell_now:capped"
+
+
+def test_a_decision_stands_and_a_failed_wake_does_not_use_up_the_day(table, monkeypatch):
+    done = follow_ups.add(OWNER, "看 ARDT", NOW + timedelta(hours=1), now=NOW)
+    replies = iter([{"outcome": "failed"}, {"outcome": "decided", "decision": "record"}])
+
+    async def wake(event, *, owner_hash):
+        return next(replies)
+    from app.kernel import wake as kernel_wake
+    monkeypatch.setattr(kernel_wake, "wake", wake)
+    later = NOW + timedelta(hours=2)
+    follow_ups.run_due(OWNER, later)
+    follow_ups.run_due(OWNER, later + timedelta(minutes=5))        # the failed try left the day's allowance: tried again the same day
+    with SessionLocal() as db:
+        row = db.get(follow_ups.FollowUp, done["id"])
+        assert row.status == "fired" and row.outcome == "record" and row.attempts == 2
+
+
+def test_a_follow_up_waits_after_a_latest_known_block_and_its_wake_knows_no_alert_went_out(monkeypatch):
+    import asyncio as _asyncio
+    from types import SimpleNamespace
+    from app.kernel import act, wake
+    from app import permission_mode
+    monkeypatch.setattr(permission_mode, "get", lambda owner: "default")
+    run = SimpleNamespace(read_results=0, outside_in_prompt=True, permission_mode="default", context=SimpleNamespace(owner_hash="o"))
+    prepared = act.Prepared(operation={"name": "follow_up", "arguments": {}}, display={}, tier=1)
+    assert _asyncio.run(act._runs_at_once(run, prepared, None)) is False
+    run.outside_in_prompt = False
+    assert _asyncio.run(act._runs_at_once(run, prepared, None)) is True
+    monkeypatch.setattr(wake.duty_log, "recent", lambda *a, **k: [])
+    monkeypatch.setattr(wake.alert_feedback, "recent", lambda *a, **k: [])
+    relation, *_ = wake._facts("o" * 64, {"alert_id": 1, "symbol": "—", "kind": "follow_up", "text": "【跟进】看一眼"})
+    assert relation.get("no_alert") is True and "already_sent" not in relation
