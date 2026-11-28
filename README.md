@@ -41,7 +41,7 @@
 > - 财报日历和市场一致预期；
 > - 后台各栏。
 >
-> 旧流水线已经删除。评测题集 86/86 全过（旧流程基线 83/86），整轮中位约 5 秒（旧流程 11.5 秒）。设计见[新内核方案](docs/finbot-new-kernel-plan-2026-11-22.zh-CN.md)，各阶段的报告在 [docs/reports/](docs/reports/)。
+> 旧流水线已经删除。评测题集 86/86 全过（旧流程基线 83/86），整轮中位约 5 秒（旧流程 11.5 秒）。设计见[新内核方案](docs/finbot-new-kernel-plan-2026-11-22.zh-CN.md)，各阶段的报告在 [docs/reports/](docs/reports/)。做了哪些取舍、为什么、用什么量，见[取舍说明](docs/finbot-tradeoffs.zh-CN.md)。
 >
 > The 2026-11-28 release replaces the conversation pipeline with a new kernel: one append-only tool loop, with no pre-classification and no post-answer rewrite. It chooses how hard to think, says what it is doing as it works, accepts interjections and can hand work off. Anything the system can do, it can do; writes to your data wait for your confirmation. Also live:
 > - company files and the "latest known" block;
@@ -50,7 +50,7 @@
 > - the earnings calendar with consensus estimates;
 > - the backstage pages.
 >
-> The old pipeline is removed. The evaluation suite passes 86/86 (old baseline: 83/86), with a median turn of about 5 s (old: 11.5 s). See the [kernel plan (Chinese)](docs/finbot-new-kernel-plan-2026-11-22.zh-CN.md) and the per-stage reports in [docs/reports/](docs/reports/).
+> The old pipeline is removed. The evaluation suite passes 86/86 (old baseline: 83/86), with a median turn of about 5 s (old: 11.5 s). See the [kernel plan (Chinese)](docs/finbot-new-kernel-plan-2026-11-22.zh-CN.md) and the per-stage reports in [docs/reports/](docs/reports/). What was traded for what, and how it is measured: [the trade-offs (Chinese)](docs/finbot-tradeoffs.zh-CN.md).
 
 > **2026-11 发布 / Earlier in November** — FinBot 从「研究证据工作台」扩展为**个人金融助手**：多 bot、持仓、例行任务、Telegram 通道、财报监控与提醒、推理模型预测（以 naive-vol-v1 为免费基准）、工具渐进披露、上下文滚动压缩。逐项前后数据与**尚待实测**的清单见[前后对比报告](docs/reports/2026-11-personal-finance-before-after.md)；真人真机验收尚未统一执行，README 只写已上线且可核验的内容。
 >
