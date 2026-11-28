@@ -122,3 +122,25 @@ def test_the_store_defaults_to_the_middle(disposable_database):
     assert permission_mode.set_mode("o" * 64, "ask")["mode"] == "ask" and permission_mode.get("o" * 64) == "ask"
     with pytest.raises(ValueError):
         permission_mode.set_mode("o" * 64, "everything")
+
+
+def test_a_go_ahead_from_an_earlier_turn_does_not_count(env, fake_consent, mode):
+    """11-28 review: 「直接做」 holds for the turn he said it in; an earlier message in the history is not this turn's word."""
+    mode("default")
+    history = [{"role": "system", "content": "endpoint"}, {"role": "user", "content": "不用确认，直接做"}, {"role": "assistant", "content": "好"},
+               {"role": "user", "content": "帮我做一份 AAPL 的预测"}]
+    fake = script(env, [step(calls=[act_call("c1", "forecast", {"symbol": "AAPL"}, go_ahead="不用确认，直接做")]), step(text="好")])
+    run("帮我做一份 AAPL 的预测", context=ctx(), messages=history)
+    assert fake_consent.costly == [] and statuses(fake) == ["awaiting_confirmation"]
+
+
+def test_saving_a_page_waits_after_the_search_in_every_mode(env, fake_consent, mode, monkeypatch):
+    """A page could steer what goes into his 资料库: after the search it waits, unlike the official fetches."""
+    from tests.test_kernel_loop import PAGE, web_env
+    web_env(env, monkeypatch)
+    for chosen in ("default", "full"):
+        mode(chosen)
+        script(env, [step(calls=[call("c1", "web_research", {"query": "量子计算"})]),
+                     step(calls=[act_call("c2", "ingest_web_source", {"url": PAGE["url"], "symbol": "IONQ"})]), step(text="好")])
+        run(context=ctx())
+        assert fake_consent.executed == [] and fake_consent.costly == [], chosen

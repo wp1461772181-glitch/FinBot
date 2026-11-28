@@ -33,6 +33,9 @@ ACT = "act"
 # nothing and changes none of his data: the design's 「拉取」 (4.2, section 5: 系统里没有就现在去拿).  11-28: it was tier 3, so a
 # research turn stopped to ask before reading a 10-Q.  It is tier 1 now, and it runs at once even after a read.
 PUBLIC_FETCH = ("fetch_sec", "refresh_sec", "scan_official", "initialize_prices", "ingest_web_source")
+# From official sources (SEC, its filing index, the price feed): a page it read cannot choose what they hold, so they still run after one.
+# ``ingest_web_source`` stores a page it found, which a page could steer into his 资料库 and later answers: after a read it waits on the card.
+OFFICIAL_FETCH = ("fetch_sec", "refresh_sec", "scan_official", "initialize_prices")
 TIER1 = ("remember", "forget", "add_to_research_queue", "remove_from_research_queue", "rate_alert", "rate_answer", "report_missed", "record_view", "drop_view",
          *PUBLIC_FETCH)
 TIER2 = ("record_trade", "set_available_funds", "set_position_plan", "create_routine", "update_routine", "delete_routine",
@@ -1000,8 +1003,8 @@ async def handle(run, args: dict) -> dict:
 
 def _direct_after_reads(run, prepared: Prepared) -> bool:
     operation = prepared.operation
-    if operation["name"] in PUBLIC_FETCH:
-        return True          # what a page could make it fetch is public material, stored in 资料库: nothing of his changes
+    if operation["name"] in OFFICIAL_FETCH:
+        return True          # official material a page cannot choose; nothing of his changes
     if operation["name"] == "report_missed":
         # 11-28 shadow: it looked up the filing first, then the record waited on a card for him to press.  The record holds his own words,
         # taken by the code from his message, and changes nothing else: a page it read cannot put words in his mouth.
@@ -1063,7 +1066,7 @@ async def _handle(run, name, args: dict) -> tuple[dict, str]:
 def _said_go_ahead(run, quote) -> bool:
     """He said in this turn to just do it: the model copies his words, the code finds them in what he typed this turn (as with a said
     ``remember``).  Never across turns, and never once outside material has been read (that text is not his)."""
-    said = " ".join(str(getattr(run, "question", "") or "").split()) + " " + " ".join(str(getattr(run, "user_text", "") or "").split())
+    said = " ".join(f"{getattr(run, 'question', '') or ''} {getattr(run, 'typed_this_turn', '') or ''}".split())      # not ``user_text``: that holds earlier turns
     quote = " ".join(str(quote or "").split())
     return len(quote) >= 2 and quote in said
 

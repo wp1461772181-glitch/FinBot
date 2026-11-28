@@ -88,7 +88,8 @@ class _Run:
     question: str = ""      # this turn's user message, as typed
     turn_id: str = ""
     tier: str = "low"
-    permission_mode: str | None = None   # his permission mode, read once a turn by ``act`` (``app.permission_mode``)
+    permission_mode: str | None = None
+    typed_this_turn: str = ""          # what he sent while this turn ran (``question`` is what began it); never an earlier turn   # his permission mode, read once a turn by ``act`` (``app.permission_mode``)
     started: float = field(default_factory=time.monotonic)
     citations: list = field(default_factory=list)
     web_rows: dict = field(default_factory=dict)      # url -> the raw row of a page this turn's web reads returned (what ``act`` may save)
@@ -553,6 +554,7 @@ async def _intake(run: _Run) -> None:
     run.messages.append({"role": "system", "content": prompt.interjection_note([m.id[:inboxes.SHORT_ID] for m in fresh], paused=run.cut)})
     run.cut = False
     run.user_text += "\n" + "\n".join(m.text for m in fresh)      # his figures may be bound by ``calculate`` like any he typed
+    run.typed_this_turn += "\n" + "\n".join(m.text for m in fresh)
     mark_timeline(run, "interjection", count=len(fresh))
     mark_progress()
 
