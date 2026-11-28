@@ -10,7 +10,7 @@ import { Skeleton } from "@/components/state/Skeleton";
 import type { Bot, BotTool, ModelCatalog } from "../../api/bots";
 import { useLocale } from "../../i18n";
 import { botModelLabel, keyStatusLabel, MAX_FOCUS_COMPANIES, parseFocusSymbols, toggleTool, toolEnabled } from "../../bot-form-items.mjs";
-import { effectiveEntry, effortChoices, noEffort } from "../../model-effort.mjs";
+
 import { groupTools, focusSymbols, scopeSummary, withFocusSymbols, withFocusTheme, type BotDraft } from "../../bot-settings-form.mjs";
 import { toolLabel } from "../../agent-tool-labels.mjs";
 import { paths } from "../../routes.mjs";
@@ -77,11 +77,10 @@ export function FocusFields({ draft, update, disabled, bot }: FormProps & { bot:
   </>;
 }
 
-/** 模型: the model and the reasoning effort.  The same two fields of the bot the chat's model badge changes: a save here shows there, and the other way round. */
+/** 模型: the model (the chat's model badge changes the same field: a save here shows there, and the other way round).  No effort choice: how
+ * hard to think is the model's call, question by question (owner 11-22; the picker was left in until 11-28). */
 export function ModelFields({ draft, update, disabled, bot, catalog }: FormProps & { bot: Bot; catalog: ModelCatalog | null }) {
   const { t } = useLocale();
-  const entry = effectiveEntry(catalog, draft.model);
-  const efforts = effortChoices(draft.reasoning_effort, entry);
   const picked = botModelLabel({ ...bot, model: draft.model }, catalog);
   return <>
     <Field>
@@ -97,16 +96,7 @@ export function ModelFields({ draft, update, disabled, bot, catalog }: FormProps
       {picked.name && !picked.usable && catalog && <p data-testid="model-missing-key" className="flex flex-wrap items-center gap-x-2 text-small text-ink">
         <span>{t("缺 key，去设置里补上")}</span><Link to={paths.settings("models")} className="font-medium text-brand underline underline-offset-4">{t("去设置补 key")}</Link></p>}
     </Field>
-    <Field>
-      <FieldLabel htmlFor="bot-effort">{t("推理强度")}</FieldLabel>
-      <Select value={draft.reasoning_effort ?? DEFAULT_ITEM} disabled={disabled || !catalog} onValueChange={(value) => update({ ...draft, reasoning_effort: value === DEFAULT_ITEM ? null : value })}>
-        <SelectTrigger id="bot-effort" data-testid="effort-select" className="w-full"><SelectValue /></SelectTrigger>
-        <SelectContent>
-          {efforts.map((choice) => <SelectItem key={choice.value ?? DEFAULT_ITEM} value={choice.value ?? DEFAULT_ITEM}>{t(choice.label)}{choice.unsupported ? ` · ${t("不在该模型的档位内")}` : ""}</SelectItem>)}
-        </SelectContent>
-      </Select>
-      <FieldDescription>{catalog && noEffort(entry) ? t("该模型不支持思考强度") : t("「默认」不指定强度，由模型自己的默认值决定。")}</FieldDescription>
-    </Field>
+    <p data-testid="effort-note" className="text-small text-muted-foreground">{t("思考深度不用设置：它按每个问题自己决定，从浅到深。")}</p>
   </>;
 }
 

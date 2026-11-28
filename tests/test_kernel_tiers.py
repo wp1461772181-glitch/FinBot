@@ -30,22 +30,23 @@ def test_escalate_changes_effort_from_the_next_step(env):
     assert tool_message(fake, 1) == {"ok": True, "tier": "high", "note": "已切换到 high 档，请继续。"}
 
 
-def test_escalate_is_clamped_to_the_bot_ceiling(env):
+@pytest.mark.parametrize("stored", ["low", "medium", "minimal", "none", None])
+def test_a_bots_stored_effort_is_not_a_ceiling(env, stored):
+    """How hard to think is the model's call (owner 11-22): an effort a bot still carries from the old picker changes nothing (11-28)."""
+    env.monkeypatch.delenv("FINBOT_KERNEL_TOP_TIER", raising=False)
     fake = script(env, [step(calls=[call("c1", "escalate", {"depth": "high"})]), step(text="好")])
-    result, _ = run(context=make_context(reasoning_effort="medium"))
+    result, _ = run(context=make_context(reasoning_effort=stored))
+    assert [c["kwargs"]["reasoning_effort"] for c in fake.calls] == ["low", "high"]
+    assert result["audit"]["tier"] == "high" and result["audit"]["escalated"] is True
+
+
+def test_the_servers_top_tier_is_the_only_ceiling(env):
+    env.monkeypatch.setenv("FINBOT_KERNEL_TOP_TIER", "mid")
+    fake = script(env, [step(calls=[call("c1", "escalate", {"depth": "high"})]), step(text="好")])
+    result, _ = run(context=make_context(reasoning_effort="high"))
     assert fake.calls[1]["kwargs"]["reasoning_effort"] == "medium"
     assert result["audit"]["tier"] == "mid"
-    message = tool_message(fake, 1)
-    assert message["tier"] == "mid" and "最高只到" in message["note"]
-    assert message["note"] == "这个助手最高只到 mid 档，已按 mid 档继续。"
-
-
-def test_bot_ceiling_low_never_escalates(env):
-    fake = script(env, [step(calls=[call("c1", "escalate", {"depth": "mid"})]), step(text="好")])
-    result, _ = run(context=make_context(reasoning_effort="low"))
-    assert result["audit"]["tier"] == "low" and result["audit"]["escalated"] is False
-    assert fake.calls[1]["kwargs"]["reasoning_effort"] == "low"
-    assert tool_message(fake, 1)["tier"] == "low"
+    assert tool_message(fake, 1)["note"] == "服务器设置的上限是 mid 档，已按 mid 档继续。"
 
 
 @pytest.mark.parametrize("args", [{"depth": "low"}, {"depth": "ultra"}, {}, "not json"])
@@ -77,13 +78,12 @@ def test_escalate_is_always_last_in_the_tool_list_and_never_invoked_through_tool
     assert [m["tool_call_id"] for m in sent] == ["c1", "c2"]
 
 
-def test_ceiling_and_clamp_tables():
-    assert tiers.ceiling(None) == "high"
-    assert tiers.ceiling("low") == "low"
-    assert tiers.ceiling("medium") == "mid"
-    assert tiers.ceiling("max") == "high"
-    assert tiers.ceiling("none") == "low"
-    assert tiers.ceiling("minimal") == "low"
+def test_ceiling_and_clamp_tables(monkeypatch):
+    monkeypatch.delenv("FINBOT_KERNEL_TOP_TIER", raising=False)
+    assert tiers.ceiling() == "high"
+    for value, top in (("low", "low"), ("MID", "mid"), ("high", "high"), ("max", "high"), ("", "high")):
+        monkeypatch.setenv("FINBOT_KERNEL_TOP_TIER", value)
+        assert tiers.ceiling() == top
     assert tiers.clamp("high", "mid") == "mid"
     assert tiers.clamp("mid", "high") == "mid"
 
@@ -110,9 +110,11 @@ def test_tier_event_only_when_the_tier_rises(env):
     script(env, [step(calls=[call("c1", "escalate", {"depth": "high"})]), step(calls=[call("c2", "escalate", {"depth": "high"})]), step(text="好")])
     _, events = run(context=make_context(reasoning_effort="high"))
     assert [e for e in events if e["event"] == "tier"] == [{"event": "tier", "tier": "high"}]
+    env.monkeypatch.setenv("FINBOT_KERNEL_TOP_TIER", "low")      # a turn held at low by the server never rises
     script(env, [step(calls=[call("c3", "escalate", {"depth": "high"})]), step(text="好")])
-    _, events = run(context=make_context(reasoning_effort="low"))
+    _, events = run(context=make_context(reasoning_effort="high"))
     assert not [e for e in events if e["event"] == "tier"]
+    env.monkeypatch.delenv("FINBOT_KERNEL_TOP_TIER")
     script(env, [step(calls=[call("c4", "escalate", {"depth": "mid"})]), step(calls=[call("c5", "escalate", {"depth": "high"})]), step(text="好")])
     _, events = run(context=make_context(reasoning_effort="high"))
     assert [e["tier"] for e in events if e["event"] == "tier"] == ["mid", "high"]

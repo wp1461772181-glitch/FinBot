@@ -2770,5 +2770,9 @@
   "原因": "Reason",
   "查看原对话": "Open the conversation",
   "补记": "Reconstructed",
-  "（已删除，内容不保留）": "(Deleted; content not kept)"
+  "（已删除，内容不保留）": "(Deleted; content not kept)",
+  "思考深度不用选：它按每个问题自己决定，从浅到深。": "No need to pick how hard it thinks: it decides for each question, from light to deep.",
+  "思考深度不用设置：它按每个问题自己决定，从浅到深。": "No need to set how hard it thinks: it decides for each question, from light to deep.",
+  "快速切换模型": "Switch model",
+  "↑↓ 选择　↵ 确认": "↑↓ choose   ↵ confirm"
 }

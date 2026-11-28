@@ -1,7 +1,8 @@
-// The panel of the composer's model selector: a centred command palette on a wide screen (AI Elements' Model Selector), a bottom drawer below 1024px, one body in both.
+// The panel of the composer's model selector (the model only: how hard to think is the model's call, question by question; the effort row
+// was taken out 11-28): a centred command palette on a wide screen (AI Elements' Model Selector), a bottom drawer below 1024px, one body in both.
 // A chunk of its own: ModelEffortPicker loads it when the badge is first pressed (or hovered), so the composer carries only the badge.  It owns no state that matters:
 // the picker holds the catalog, the shown bot and the save, and this draws them; a choice goes back through `onChoose`.
-import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Check, Lightbulb, Server } from "lucide-react";
 import { Drawer, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
 import {
@@ -10,7 +11,7 @@ import {
 import { Command } from "@/components/ui/command";
 import { cn } from "@/lib/utils";
 import { useLocale } from "../../i18n";
-import { effortBars, effortChoices, effortHigh, effortHint, effortTone, modelSections, noEffort } from "../../model-effort.mjs";
+import { modelSections } from "../../model-effort.mjs";
 import type { CatalogEffortEntry, ModelGroup } from "../../model-effort.mjs";
 import { useMatchMedia, PHONE_QUERY } from "./use-media";
 import type { Bot, ModelCatalog } from "../../api/bots";
@@ -39,7 +40,7 @@ export default function ModelEffortPanel(props: PanelProps) {
   // the row last hovered, so Enter right away re-picks what is shown instead of saving a stale row.
   useEffect(() => { if (props.open) setHighlight(props.shown.model ?? DEFAULT_VALUE); }, [props.open, props.shown.model]);
   const commandProps = { value: highlight, onValueChange: setHighlight, className: "bg-transparent rounded-[inherit]" };
-  const title = t("模型与推理强度");
+  const title = t("模型");
   const onCloseAutoFocus = (event: Event) => { event.preventDefault(); props.returnFocus(); };
   // A wrapper that is always drawn, even while the catalog is on its way: the keyboard hint and the error sit under the list in both shells.
   const body = <PanelBody {...props} />;
@@ -60,7 +61,7 @@ export default function ModelEffortPanel(props: PanelProps) {
   </ModelSelector>;
 }
 
-function PanelBody({ catalog, shown, entry, busy, error, onChoose }: PanelProps) {
+function PanelBody({ catalog, shown, busy, error, onChoose }: PanelProps) {
   const { t } = useLocale();
   const list = useRef<HTMLDivElement>(null);
   const sections = catalog ? modelSections(catalog, shown.model) : null;
@@ -98,11 +99,11 @@ function PanelBody({ catalog, shown, entry, busy, error, onChoose }: PanelProps)
         </ModelSelectorGroup>)}
       </>}
     </ModelSelectorList>
-    <EffortControl shown={shown} entry={entry} busy={busy} onChoose={(value) => onChoose("effort", value)} />
-    <div className="px-4 pb-3">
+    <div className="border-t border-line px-4 pb-3 pt-2.5">
+      <p data-testid="effort-note" className="pb-1 text-caption text-muted-foreground">{t("思考深度不用选：它按每个问题自己决定，从浅到深。")}</p>
       {error && <p role="alert" className="pb-1 text-small text-danger">{error}</p>}
       <p className="text-caption text-muted-foreground">{t("模型和 key 只在服务器上，浏览器不保存 key。")}</p>
-      <p className="mt-1 hidden text-caption text-faint lg:block" aria-hidden="true">{t("↑↓ 选择　↵ 确认　Tab 到强度")}</p>
+      <p className="mt-1 hidden text-caption text-faint lg:block" aria-hidden="true">{t("↑↓ 选择　↵ 确认")}</p>
     </div>
   </>;
 }
@@ -113,49 +114,4 @@ function GroupHeading({ group }: { group: ModelGroup }) {
   const { t } = useLocale();
   const label = group.label ?? (group.provider === "custom" ? t("自定义（OpenAI 兼容）") : t("其他服务商"));
   return <span className="flex items-center gap-1.5"><ModelSelectorLogo provider={group.logo} className="size-3 opacity-70" />{label}</span>;
-}
-
-/**
- * The strength control: one radio group, the tiers the model takes after 默认 (a stored tier it does not take stays first, marked).  Arrow keys move the focus along the row;
- * Space or Enter chooses, because a choice is saved at once and closes the panel.  Its keys never reach the list above (cmdk would take an arrow or Enter for a model).
- */
-function EffortControl({ shown, entry, busy, onChoose }: { shown: Bot; entry: CatalogEffortEntry | null; busy: boolean; onChoose: (value: string | null) => void }) {
-  const { t } = useLocale();
-  const refs = useRef<Array<HTMLButtonElement | null>>([]);
-  const choices = effortChoices(shown.reasoning_effort, entry);
-  const at = Math.max(0, choices.findIndex((choice) => choice.checked));
-  const current = choices[at];
-  const stored = shown.reasoning_effort ?? null;
-  const tone = effortTone(stored);
-
-  function onKey(event: KeyboardEvent<HTMLButtonElement>, from: number) {
-    const last = choices.length - 1;
-    const to = event.key === "ArrowRight" || event.key === "ArrowDown" ? (from + 1) % choices.length : event.key === "ArrowLeft" || event.key === "ArrowUp" ? (from + last) % choices.length
-      : event.key === "Home" ? 0 : event.key === "End" ? last : -1;
-    if (to < 0) return;
-    event.preventDefault();
-    refs.current[to]?.focus();
-  }
-
-  // The strength row's keys stay out of the model list (cmdk would move its highlight), but Tab goes on: the dialog's focus trap
-  // wraps it from here, the last tabbable stop, back to the search box.
-  return <div className="border-t border-line px-3 pb-3 pt-2.5" onKeyDown={(event) => { if (event.key !== "Tab") event.stopPropagation(); }}>
-    <div className="flex items-baseline justify-between gap-3 px-1 pb-1.5">
-      <span id="effort-label" className="shrink-0 text-caption font-medium text-faint">{t("推理强度")}</span>
-      <span aria-live="polite" className={cn("min-w-0 truncate text-caption", current?.unsupported ? "text-action" : "text-muted-foreground")}>
-        {current?.unsupported ? t("不在该模型的档位内") : t(effortHint(stored))}
-      </span>
-    </div>
-    {noEffort(entry) && <p className="px-1 pb-1.5 text-small text-muted-foreground">{t("该模型不支持思考强度")}</p>}
-    <div role="radiogroup" aria-labelledby="effort-label" className="effort-seg" data-testid="effort-seg" style={{ "--n": choices.length, "--i": at, "--t": tone } as CSSProperties}>
-      <span aria-hidden="true" className="effort-thumb" />
-      {choices.map((choice, index) => <button key={`e:${choice.value ?? "default"}`} type="button" role="radio" aria-checked={choice.checked} aria-disabled={busy || undefined}
-        tabIndex={choice.checked ? 0 : -1} ref={(node) => { refs.current[index] = node; }} data-unsupported={choice.unsupported || undefined}
-        onKeyDown={(event) => onKey(event, index)} onClick={() => { if (!busy) onChoose(choice.value); }}
-        className={cn("effort-opt outline-none focus-visible:ring-2 focus-visible:ring-ring", choice.checked && "effort-gradient-text")} data-high={choice.checked && effortHigh(choice.value) ? "true" : undefined}>
-        {choice.value !== null && <span className="effort-bars" aria-hidden="true">{[1, 2, 3].map((n) => <i key={n} data-on={n <= effortBars(choice.value) ? "true" : undefined} />)}</span>}
-        <span>{t(choice.label)}</span>
-      </button>)}
-    </div>
-  </div>;
 }
