@@ -2,6 +2,7 @@
 
   set -a; . /opt/finbot/ruler.env; set +a; export RULER_DATABASE_URL="$DATABASE_URL"
   python -m scripts.wake_replay --sentinel-db /opt/finbot/src/data/sentinel.db --alert 59 [--tier 2 --sigma 4.9] [--held]
+  python -m scripts.wake_replay --event-json event.json      # an event written by hand (e.g. a filing alert, kind "filing")
 
 Run it from the code under test (the shadow's ``/opt/finbot/ruler-src`` with the branch synced in).  It refuses unless
 ``RULER_DATABASE_URL`` is set and equal to ``DATABASE_URL`` (the shadow environment sourced as the README says), and it always runs
@@ -80,8 +81,9 @@ def call_name(call) -> str | None:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--sentinel-db", required=True)
-    ap.add_argument("--alert", type=int, required=True)
+    ap.add_argument("--sentinel-db")
+    ap.add_argument("--alert", type=int)
+    ap.add_argument("--event-json", help="an event as the sentinel would post it (alert_id, symbol, kind, text, ...)")
     ap.add_argument("--tier", type=int, choices=(0, 1, 2))
     ap.add_argument("--sigma", type=float)
     ap.add_argument("--held", action="store_true")
@@ -93,7 +95,13 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     os.environ["FINBOT_DUTY_MODE"] = "shadow"          # never sends, whatever the environment file says
     try:
-        event = event_from(args.sentinel_db, args.alert, offset=args.id_offset, tier=args.tier, sigma=args.sigma, held=args.held)
+        if args.event_json:
+            event = json.loads(Path(args.event_json).read_text())
+            event["alert_id"] = args.id_offset + int(event.get("alert_id") or 0)
+        elif args.sentinel_db and args.alert is not None:
+            event = event_from(args.sentinel_db, args.alert, offset=args.id_offset, tier=args.tier, sigma=args.sigma, held=args.held)
+        else:
+            raise LookupError("要么给 --sentinel-db 和 --alert，要么给 --event-json")
     except LookupError as exc:
         print(str(exc), file=sys.stderr)
         return 2
@@ -106,7 +114,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     row = asyncio.run(wake.wake(event, owner_hash=owner_hash(credential)))
     tools = _tools_of(row["turn_id"]) if row.get("turn_id") else []
-    print(json.dumps({"alert": args.alert, "judged_as": event["alert_id"], "tier": event.get("tier"), "mode": row.get("mode"),
+    print(json.dumps({"alert": args.alert if args.alert is not None else args.event_json, "judged_as": event["alert_id"], "tier": event.get("tier"), "mode": row.get("mode"),
                       "outcome": row.get("outcome"), "decision": row.get("decision"), "ms": row.get("ms"),
                       "model_calls": row.get("model_calls"), "tools": tools, "reason": row.get("reason"),
                       "message": row.get("message")}, ensure_ascii=False, indent=1, default=str))

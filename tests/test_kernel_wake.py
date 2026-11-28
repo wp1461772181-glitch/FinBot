@@ -724,3 +724,24 @@ def test_the_wechat_copy_of_an_alert_is_not_in_the_recent_outbox(env):
     judge()
     system = fake.calls[0]["messages"][0]["content"]
     assert "一条普通通知" in system and "哨兵副本的原文" not in system
+
+
+def test_a_filing_alert_reaches_the_duty_turn_with_its_filing():
+    """11-28: a new filing (not earnings) wakes the duty turn; the form, items and link reach it, and its prompt says to read it."""
+    filing = {"accession": "0001045810-26-000050", "form": "8-K", "items": ["5.02", "9.01"],
+              "url": "https://www.sec.gov/Archives/edgar/data/1045810/000104581026000050/x.htm", "filed": "2026-11-20", "description": None}
+    cleaned = wake.clean_event({**event(), "kind": "filing", "text": "【新公告】NVDA 8-K（高管或董事变动），2026-11-20 提交。", "filing": filing})
+    assert cleaned["filing"] == filing
+    text = prompt.wake_system_text()
+    assert "新的官方公告" in text and "kind 是 filing" in text and "先读原文" in text
+
+
+def test_sentinel_payload_carries_the_filing(tmp_path):
+    from sentinel.main import Sentinel
+    sentinel = Sentinel.__new__(Sentinel)
+    from sentinel.store import Store
+    sentinel.store = Store(tmp_path / "s.db")
+    alert_id = sentinel.store.add_alert("NVDA", "filing", "【新公告】NVDA 8-K", False, 1_700_000_000.0)
+    payload = sentinel.alert_payload(alert_id, {"symbol": "NVDA", "kind": "filing", "text": "【新公告】NVDA 8-K", "held": True,
+                                                "filing": {"form": "8-K", "items": ["5.02"], "url": "u", "accession": "a"}})
+    assert payload["kind"] == "filing" and payload["filing"]["items"] == ["5.02"] and payload.get("tier") is None

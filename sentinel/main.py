@@ -49,7 +49,7 @@ class Sentinel:
         self._daily_failed: dict[str, float] = {}
         self._poll: dict[str, dict] = {}   # this poll's fresh price of each symbol ({"price", "prev_close"}); the portfolio preset reads it
         self.filings = FilingWatcher(self.store, self.config.get, post_event=self.post_event_now,
-                                     raise_alert=self.escalator.raise_alert)
+                                     raise_alert=self.escalator.raise_alert, announce=self._announce)
 
     # --- jobs (each is one tick) -------------------------------------------------
     def check_health(self) -> None:
@@ -754,7 +754,8 @@ class Sentinel:
                    "prev_close": alert.get("prev_close"), "trigger": alert.get("trigger") or None,
                    "event_date": alert.get("event_date"), "members": members or None, "tier": alert.get("tier"),
                    "sigma_mult": alert.get("sigma_mult"), "rule_id": alert.get("rule_id"),
-                   "owner_rule": True if alert.get("kind") == "rule" else None, "preset_key": alert.get("preset_key")}
+                   "owner_rule": True if alert.get("kind") == "rule" else None, "preset_key": alert.get("preset_key"),
+                   "filing": alert.get("filing")}
         price, prev_close = alert.get("price"), alert.get("prev_close")
         if price is not None and prev_close:
             payload["move_pct"] = (price / prev_close - 1) * 100
