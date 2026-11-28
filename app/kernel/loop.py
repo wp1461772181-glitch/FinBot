@@ -151,14 +151,14 @@ def _user_text(question: str, history: list[dict]) -> str:
     return "\n".join([*typed, question])
 
 
-def _add_usage(run: _Run, data: dict, began: float) -> None:
+def _add_usage(run: _Run, data: dict, began: float, tier: str | None = None) -> None:
     """Add one model call to the totals and keep its own line: which tier it ran at, how long, what the cache gave."""
     usage = (data or {}).get("usage") or {}
     tokens, read, written = (usage.get(key) or 0 for key in ("total_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"))
     run.audit["token_usage"] += tokens
     run.audit["cache_read_tokens"] += read
     run.audit["cache_write_tokens"] += written
-    run.audit["calls"].append({"tier": run.tier, "ms": round((time.monotonic() - began) * 1000), "tokens": tokens,
+    run.audit["calls"].append({"tier": tier or run.tier, "ms": round((time.monotonic() - began) * 1000), "tokens": tokens,
                                "cache_read": read, "cache_write": written, "model": run.model.label})
     mark_timeline(run, "call", index=len(run.audit["calls"]) - 1)
 
@@ -207,11 +207,11 @@ async def _switch_to_backup(run: _Run, failure: Exception) -> bool:
     return True
 
 
-async def _model_step(run: _Run, tool_schemas: list[dict]) -> dict:
+async def _model_step(run: _Run, tool_schemas: list[dict], *, tier: str | None = None, quiet: bool = False) -> dict:
     """One model call; when it fails after its retry, the same step is made again on the backup model."""
     while True:
         try:
-            return await _call_model(run, tool_schemas)
+            return await _call_model(run, tool_schemas, tier=tier, quiet=quiet)
         except Exception as failure:
             if run.fallback_used:
                 run.audit["fallback"]["failed"] = True
@@ -231,13 +231,20 @@ class AnswerPaused(Exception):
     """Raised from the text callback when the owner says something while the answer is being written: the call stops there."""
 
 
-async def _call_model(run: _Run, tool_schemas: list[dict]) -> dict:
+async def _call_model(run: _Run, tool_schemas: list[dict], *, tier: str | None = None, quiet: bool = False) -> dict:
     """One model call whose text is streamed out.  One retry on a retryable provider failure.  When the owner sends a message while
-    the answer is being written, the call stops within one piece of text and returns what was written as ``{"paused": True, ...}``."""
+    the answer is being written, the call stops within one piece of text and returns what was written as ``{"paused": True, ...}``.
+
+    ``tier`` runs this one call at another tier than the turn's; ``quiet`` keeps its text off the screen (a lookup try, ``_step``)."""
     use = run.model
+    tier = tier or run.tier
     streaming = _streams(use)      # only a provider that streams can be stopped within a piece of text; the others finish the call first
 
     async def on_text(piece: str) -> None:
+        if quiet:
+            if piece and isinstance(piece, str):
+                run.step_text += piece
+            return
         if piece and isinstance(piece, str):
             if run.paused_partial:      # the text the owner's message cut off is still on his screen: this replaces it
                 run.paused_partial = False
@@ -258,7 +265,7 @@ async def _call_model(run: _Run, tool_schemas: list[dict]) -> dict:
             with model_usage.attempt(attempt + 1):
                 data, message = await provider.stream_decision(
                     use.provider, use.model, use.api_key, run.messages, tool_schemas, base_url=use.base_url,
-                    reasoning_effort=tiers.EFFORT[run.tier], on_text=on_text, keep_thinking=True, cache=True,
+                    reasoning_effort=tiers.EFFORT[tier], on_text=on_text, keep_thinking=True, cache=True,
                     **({"catalog_name": use.name} if use.name else {}))
         except AnswerPaused:
             run.audit["model_calls"] += 1
@@ -283,8 +290,46 @@ async def _call_model(run: _Run, tool_schemas: list[dict]) -> dict:
             continue
         run.audit["model_calls"] += 1
         run.audit["decision_steps"] += 1
-        _add_usage(run, data, began)
+        _add_usage(run, data, began, tier)
         return message
+
+
+LOOKUP_CALLS = frozenset(READ_TOOLS) | {helper.DELEGATE}     # a step made only of these is legwork: what to look up, not what to conclude
+
+
+def _lookup_tier_now(run: _Run) -> str | None:
+    """The tier to try this step at first, or None for the turn's own.  Only once the turn has gone up, only right after a step that
+    looked things up (not the step after ``escalate``: the higher tier makes its own first move, its plan), and never right after the
+    owner spoke (what he said is the turn's tier to weigh)."""
+    lookup = tiers.lookup_tier()
+    if lookup is None or run.is_helper or TIERS_INDEX[lookup] >= TIERS_INDEX[run.tier]:
+        return None
+    if not run.messages or run.messages[-1].get("role") != "tool":
+        return None
+    for message in reversed(run.messages):
+        if message.get("role") == "assistant":
+            names = {(call.get("function") or {}).get("name") for call in message.get("tool_calls") or []}
+            return lookup if names and names <= LOOKUP_CALLS else None
+    return None
+
+
+TIERS_INDEX = {name: index for index, name in enumerate(tiers.TIERS)}
+
+
+async def _step(run: _Run) -> dict:
+    """One step of the turn.  Once the turn has gone up, a step after a lookup is first tried at the lookup tier, its text kept off
+    the screen: when all it asks for is more lookups, that is the step (fetching does not need the higher tier); when it wants to
+    conclude, write, act or anything else, the try is dropped and the step is made at the turn's tier, which decides for itself
+    whether to look further (design 4.4)."""
+    lookup = _lookup_tier_now(run)
+    if lookup is not None:
+        tried = await _model_step(run, run.schemas, tier=lookup, quiet=True)
+        names = [(call.get("function") or {}).get("name") for call in tried.get("tool_calls") or []]
+        if names and all(name in LOOKUP_CALLS for name in names):
+            run.audit["lookup_steps"] = run.audit.get("lookup_steps", 0) + 1
+            return tried
+        run.audit["lookup_redone"] = run.audit.get("lookup_redone", 0) + 1
+    return await _model_step(run, run.schemas)
 
 
 async def _tool_step(run: _Run, message: dict) -> None:
@@ -436,7 +481,7 @@ async def _loop(run: _Run) -> dict:
             stop = "time_cap"
             break
         await _intake(run)
-        message = await _model_step(run, run.schemas)
+        message = await _step(run)
         if not message.get("tool_calls"):
             if message.get("paused") or (run.inbox is not None and run.inbox.has_fresh()):
                 await _pause(run, message)      # the owner spoke while the answer was being written: decide with the half-written text in hand
