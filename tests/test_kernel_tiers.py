@@ -27,7 +27,7 @@ def test_escalate_changes_effort_from_the_next_step(env):
     assert [c["kwargs"]["reasoning_effort"] for c in fake.calls] == ["low", "high"]
     assert result["audit"]["tier"] == "high" and result["audit"]["escalated"] is True
     assert result["final_protocol"]["tier"] == "high"
-    assert tool_message(fake, 1) == {"ok": True, "tier": "high", "note": "已切换到 high 档，请继续。之后只是查资料的步骤按 low 档跑，判断和写回答都在 high 档。"}
+    assert tool_message(fake, 1) == {"ok": True, "tier": "high", "note": "已切换到 high 档，请继续。"}
 
 
 @pytest.mark.parametrize("stored", ["low", "medium", "minimal", "none", None])
@@ -46,7 +46,7 @@ def test_the_servers_top_tier_is_the_only_ceiling(env):
     result, _ = run(context=make_context(reasoning_effort="high"))
     assert fake.calls[1]["kwargs"]["reasoning_effort"] == "medium"
     assert result["audit"]["tier"] == "mid"
-    assert tool_message(fake, 1)["note"] == "服务器设置的上限是 mid 档，已按 mid 档继续。之后只是查资料的步骤按 low 档跑，判断和写回答都在 mid 档。"
+    assert tool_message(fake, 1)["note"] == "服务器设置的上限是 mid 档，已按 mid 档继续。"
 
 
 @pytest.mark.parametrize("args", [{"depth": "low"}, {"depth": "ultra"}, {}, "not json"])
@@ -140,6 +140,10 @@ def test_after_going_up_lookups_run_low_and_the_answer_is_written_high(env):
     assert "草稿" not in "".join(e.get("text", "") for e in events if e.get("event") == "delta")      # never on the screen
     assert result["audit"]["lookup_steps"] == 1 and result["audit"]["lookup_redone"] == 1
     assert [c["tier"] for c in result["audit"]["calls"]] == ["low", "high", "low", "low", "high"]
+    assert [c.get("kept", True) for c in result["audit"]["calls"]] == [True, True, True, False, True]
+    assert result["audit"]["model_calls"] == 5 and result["audit"]["decision_steps"] == 4     # the dropped try is not a step
+    redo = fake.calls[4]["messages"]
+    assert redo == fake.calls[3]["messages"]          # the dropped try left nothing in the conversation
     assert result["audit"]["tier"] == "high"
 
 
@@ -171,9 +175,27 @@ def test_a_turn_that_stays_low_makes_no_extra_calls(env):
     assert _efforts(fake) == ["low", "low"]
 
 
-def test_lookup_tier_setting():
-    import os
+def test_lookup_tier_setting(monkeypatch):
     for value, expected in (("", "low"), ("mid", "mid"), ("same", None), ("bogus", "low")):
-        os.environ["FINBOT_KERNEL_LOOKUP_TIER"] = value
+        monkeypatch.setenv("FINBOT_KERNEL_LOOKUP_TIER", value)
         assert tiers.lookup_tier() == expected
-    os.environ.pop("FINBOT_KERNEL_LOOKUP_TIER")
+
+
+def test_a_delegate_counts_as_a_lookup_and_a_wake_decide_is_redone(env):
+    env.monkeypatch.delenv("FINBOT_KERNEL_LOOKUP_TIER", raising=False)
+    assert "delegate" in loop.LOOKUP_CALLS and "decide" not in loop.LOOKUP_CALLS and "act" not in loop.LOOKUP_CALLS
+
+
+def test_a_streaming_try_that_starts_writing_is_cut_and_redone(env):
+    """On a provider that streams, a try is stopped as soon as it is plainly writing an answer, instead of writing all of it."""
+    env.monkeypatch.delenv("FINBOT_KERNEL_LOOKUP_TIER", raising=False)
+    env.monkeypatch.setattr(loop, "_streams", lambda use: True)
+    long = "这是一段很长的结论。" * 40
+    fake = script(env, [step(calls=[call("c1", "escalate", {"depth": "high"})]),
+                        step(calls=[call("c2", "query_financials", {"symbol": "AAPL"})]),
+                        step(text=long, pieces=[long[:100], long[100:200], long[200:]]),
+                        step(text="正式回答")])
+    result, events = run(context=make_context())
+    assert _efforts(fake) == ["low", "high", "low", "high"] and result["answer"] == "正式回答"
+    assert result["audit"]["calls"][2]["kept"] is False and result["audit"]["calls"][2].get("cut") is True
+    assert "结论" not in "".join(e.get("text", "") for e in events if e.get("event") == "delta")

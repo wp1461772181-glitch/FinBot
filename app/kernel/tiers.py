@@ -54,7 +54,4 @@ def escalate(run, args: dict) -> dict:
         note = f"服务器设置的上限是 {tier} 档，已按 {tier} 档继续。"
     else:
         note = f"已切换到 {tier} 档，请继续。"
-    lookup = lookup_tier()
-    if lookup is not None and TIERS.index(lookup) < TIERS.index(run.tier):
-        note += f"之后只是查资料的步骤按 {lookup} 档跑，判断和写回答都在 {run.tier} 档。"
     return {"ok": True, "tier": run.tier, "note": note}

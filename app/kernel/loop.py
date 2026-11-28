@@ -227,6 +227,13 @@ def _streams(use: "ModelUse") -> bool:
     return anthropic_native.use_native(use.provider)
 
 
+class TryDropped(Exception):
+    """Raised from a lookup try's text callback once it is plainly writing (or the owner spoke): the try stops there, unused."""
+
+
+QUIET_TEXT_LIMIT = 160    # characters of visible text a lookup try may stream before it counts as writing (a line before a call is fine)
+
+
 class AnswerPaused(Exception):
     """Raised from the text callback when the owner says something while the answer is being written: the call stops there."""
 
@@ -240,10 +247,15 @@ async def _call_model(run: _Run, tool_schemas: list[dict], *, tier: str | None =
     tier = tier or run.tier
     streaming = _streams(use)      # only a provider that streams can be stopped within a piece of text; the others finish the call first
 
+    quiet_chars = 0
+
     async def on_text(piece: str) -> None:
-        if quiet:
+        nonlocal quiet_chars
+        if quiet:       # nothing reaches the screen; a streaming try that has started writing, or that the owner spoke over, stops here
             if piece and isinstance(piece, str):
-                run.step_text += piece
+                quiet_chars += len(piece)
+            if quiet_chars > QUIET_TEXT_LIMIT or (run.inbox is not None and run.inbox.has_fresh()):
+                raise TryDropped()
             return
         if piece and isinstance(piece, str):
             if run.paused_partial:      # the text the owner's message cut off is still on his screen: this replaces it
@@ -267,6 +279,12 @@ async def _call_model(run: _Run, tool_schemas: list[dict], *, tier: str | None =
                     use.provider, use.model, use.api_key, run.messages, tool_schemas, base_url=use.base_url,
                     reasoning_effort=tiers.EFFORT[tier], on_text=on_text, keep_thinking=True, cache=True,
                     **({"catalog_name": use.name} if use.name else {}))
+        except TryDropped:
+            run.audit["model_calls"] += 1
+            run.audit["decision_steps"] += 1          # taken back by ``_step`` with every dropped try
+            run.audit["calls"].append({"tier": tier, "ms": round((time.monotonic() - began) * 1000), "tokens": 0, "cache_read": 0,
+                                       "cache_write": 0, "model": run.model.label, "kept": False, "cut": True})
+            return {"role": "assistant", "content": "", "dropped": True}
         except AnswerPaused:
             run.audit["model_calls"] += 1
             run.audit["decision_steps"] += 1
@@ -325,10 +343,16 @@ async def _step(run: _Run) -> dict:
     if lookup is not None:
         tried = await _model_step(run, run.schemas, tier=lookup, quiet=True)
         names = [(call.get("function") or {}).get("name") for call in tried.get("tool_calls") or []]
-        if names and all(name in LOOKUP_CALLS for name in names):
+        spoke = run.inbox is not None and run.inbox.has_fresh()      # what he said is the turn's tier to weigh, not a lookup's
+        if not tried.get("dropped") and names and all(name in LOOKUP_CALLS for name in names) and not spoke:
             run.audit["lookup_steps"] = run.audit.get("lookup_steps", 0) + 1
             return tried
         run.audit["lookup_redone"] = run.audit.get("lookup_redone", 0) + 1
+        run.audit["decision_steps"] -= 1                # a dropped try is a model call, not a step of the turn
+        if not tried.get("dropped") and run.audit["calls"]:
+            run.audit["calls"][-1]["kept"] = False
+        if spoke:
+            await _intake(run)
     return await _model_step(run, run.schemas)
 
 
