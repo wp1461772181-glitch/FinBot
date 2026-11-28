@@ -27,3 +27,16 @@ test('open_page can name the memory page (4e) and still refuses a page it does n
  assert.equal(events[0].detail.page,'memory');
  assert.equal(dispatchAgentAction({id:'cccccccc-cccc-4ccc-8ccc-cccccccccccc',action:'open_page',page:'passwords'},host),false);
 });
+
+test('open_page: the kernel\'s new pages pass and match the server\'s table', async () => {
+  const { PAGE_PATHS, OLD_PAGES } = await import('../src/agent-client-actions.mjs');
+  const fs = await import('node:fs');
+  const host = { sessionStorage: { getItem: () => '[]', setItem: () => {} }, dispatchEvent: () => true, CustomEvent: class { constructor(type, init) { this.type = type; this.detail = init.detail; } } };
+  assert.equal(dispatchAgentAction({ id: '44444444-4444-4444-8444-444444444444', action: 'open_page', page: 'settings_models' }, host), true);
+  assert.equal(dispatchAgentAction({ id: '55555555-5555-4555-8555-555555555555', action: 'open_page', page: 'settings_secret' }, host), false);
+  assert.ok(OLD_PAGES.has('memory') && !OLD_PAGES.has('settings_models'));
+  const server = fs.readFileSync(new URL('../../app/agent_tool_catalog.py', import.meta.url), 'utf8');
+  const table = server.slice(server.indexOf('PAGE_PATHS={'), server.indexOf('}', server.indexOf('PAGE_PATHS={')) + 1);
+  for (const [page, path] of Object.entries(PAGE_PATHS)) assert.ok(table.includes(`'${page}':'${path}'`), `${page} -> ${path} is not in the server's table`);
+  assert.equal((table.match(/':'/g) || []).length, Object.keys(PAGE_PATHS).length);
+});

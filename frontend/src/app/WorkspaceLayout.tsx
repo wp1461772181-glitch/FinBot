@@ -12,6 +12,7 @@ import { getResearchQueue, putResearchQueue } from "../api/queue";
 import { markBotRead } from "../api/inbox";
 import { type Bot } from "../api/bots";
 import { normalizeHash } from "../legacy-routes.mjs";
+import { OLD_PAGES, PAGE_PATHS } from "../agent-client-actions.mjs";
 import { pathForSection, paths, sectionOfPath, splitPath, symbolFromParams, symbolParam } from "../routes.mjs";
 import { MAX_WATCHLIST, normalizeTicker, normalizeWatchlist, selectionForWatchlist } from "../watchlist.mjs";
 import { checkWatchAdd } from "../watchlist-add.mjs";
@@ -99,7 +100,8 @@ export function WorkspaceLayout({ onModeChange }: { onModeChange: (mode: "guest"
       if (action.action === "queue_remove") setSymbols(items => items.filter(item => item !== action.symbol));
       if (action.action === "queue_sync") setSymbols(action.symbols);
       if (action.action === "select_stock") switchSymbol(action.symbol);
-      if (action.action === "open_page") {
+      if (action.action === "open_page" && !OLD_PAGES.has(action.page)) navigate(PAGE_PATHS[action.page]);       // a page the kernel names by its own address
+      else if (action.action === "open_page") {
         // The page names the agent knows, renamed as they always were, then through the old-address list.
         const name = ({ predictions: "forecast", sec: "evidence" } as Record<string, string>)[action.page] ?? action.page;
         // The knowledge library is a page of its own (P8.1): the old-address list does not know #knowledge, so it is named here.

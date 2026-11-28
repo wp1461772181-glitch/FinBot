@@ -4,6 +4,7 @@ import json
 import pytest
 
 from app.agent_workflow import tools
+from app.agent_workflow.tools import invoke as REAL_INVOKE
 from app.kernel import loop, prompt, tiers
 from tests.test_kernel_loop import call, env, make_context, run, script, step  # noqa: F401  (env is a fixture)
 
@@ -283,3 +284,27 @@ def test_a_max_step_that_runs_out_of_output_is_made_again_at_high(env):
     result, _ = run(context=make_context())
     assert result["answer"] == "研究结论" and _efforts(fake) == ["low", "max", "high"]
     assert result["audit"]["deep_step_down"] == 1 and result["audit"]["tier"] == "max"
+
+def test_open_page_is_offered_and_opens_a_settings_page_with_its_link(env):
+    """Design 4.2: a key or a token he puts in himself; the kernel can still open that page for him (on a bridge: the link)."""
+    env.monkeypatch.delenv("FINBOT_WEB_URL", raising=False)
+    env.monkeypatch.setattr(tools, "invoke", REAL_INVOKE)          # the real tool: it emits the client action and writes the link
+    fake = script(env, [step(calls=[call("c1", "open_page", {"page": "settings_models"})]), step(text="已经替你打开了模型设置页。")])
+    result, events = run(context=make_context(executor=None))
+    assert "open_page" in fake.calls[0]["tools"]
+    [action] = [e for e in events if e.get("event") == "client_action"]
+    assert action["action"] == "open_page" and action["page"] == "settings_models"
+    sent = tool_message(fake, 1)
+    assert sent["data"][0]["link"] == "https://finbotai.me/#/settings/models"
+
+
+def test_an_opened_page_is_not_a_source_and_a_guest_is_not_offered_it(env):
+    """Review 11-28: the result of open_page was numbered as a source [n] and counted as a read; a guest has no settings to open."""
+    env.monkeypatch.setattr(tools, "invoke", REAL_INVOKE)
+    fake = script(env, [step(calls=[call("c1", "open_page", {"page": "settings_models"})]), step(text="好")])
+    result, _ = run(context=make_context(executor=None))
+    assert result["citations"] == [] and tool_message(fake, 1)["data"][0]["page"] == "settings_models"
+    env.monkeypatch.setattr(loop, "owner_credential_matches", lambda value: False)
+    guest = script(env, [step(text="好")])
+    run(context=make_context(executor=None))
+    assert "open_page" not in guest.calls[0]["tools"]
