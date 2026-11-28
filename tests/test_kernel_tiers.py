@@ -126,7 +126,7 @@ def test_open_page_is_offered_and_opens_a_settings_page_with_its_link(env):
     env.monkeypatch.delenv("FINBOT_WEB_URL", raising=False)
     env.monkeypatch.setattr(tools, "invoke", REAL_INVOKE)          # the real tool: it emits the client action and writes the link
     fake = script(env, [step(calls=[call("c1", "open_page", {"page": "settings_models"})]), step(text="已经替你打开了模型设置页。")])
-    result, events = run(context=make_context())
+    result, events = run(context=make_context(executor=None))
     assert "open_page" in fake.calls[0]["tools"]
     [action] = [e for e in events if e.get("event") == "client_action"]
     assert action["action"] == "open_page" and action["page"] == "settings_models"

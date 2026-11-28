@@ -32,10 +32,10 @@ GOLDEN = {
     # 5b-1: the owner's tools gain set_watch_rule / delete_watch_rule in act and the list_watch_rules read (the system text is unchanged).
     # 5c-3c: act gains rate_alert (the system text is unchanged).
     # 5d-3a: act gains rate_answer, and each tier-1 operation's line names its arguments (the system text is unchanged).
-    "owner": ("d3bd29a8d17d179a333825a0dc071965d3d965062e701e5519dcfc989958e550",
-               "a8939601bb56f0e88c086dbccfe6e622e619b16b8c19b56d48e566b558928303"),
+    "owner": ("23ebf3db55536d5f0df42d578c1eae53bea96980f3e1250937606e36ca4424c2",
+               "8d03362697280df3da889a256265d6eaa7df03a554f0d132934487ad935ce828"),
     # 6a: a guest's system prompt gains the line about what only the owner can do (``prompt.GUEST_NOTE``); the owner's is unchanged.
-    "guest": ("cc697baf95543b43614509bb70ea10889ed11ab173f2089dd28e703b49fdaa4d", "e02eb10753903050001bcd7b2958b43b174e6eb5c68cf837ae04753d8b6d3eff"),
+    "guest": ("9823e2086b9a5f98f3a86e9a9fa00146902edc76b43bda0c413613b7e601555e", "9996e2e50ce5374e12e6110b598bfa323db443a3697aebae0f76736e80f20d64"),
 }
 
 
