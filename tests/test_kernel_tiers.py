@@ -223,9 +223,9 @@ def test_max_is_the_deep_research_tier(env):
     assert _efforts(fake) == ["low", "max"]
     assert result["audit"]["tier"] == "max" and result["final_protocol"]["tier"] == "max"
     note = tool_message(fake, 1)["note"]
-    assert "深度研究" in note and "15 分钟" in note and "推送" in note
+    assert "深度研究" in note and "10 分钟" in note and "告诉他" in note
     said = [e for e in events if e.get("event") == "narration"]
-    assert said and said[-1]["system"] is True and "后台" in said[-1]["text"] and "推送" in said[-1]["text"]
+    assert said and said[-1]["system"] is True and "后台" in said[-1]["text"] and "告诉你" in said[-1]["text"]
     assert {"event": "tier", "tier": "max"} in events
 
 
@@ -252,3 +252,22 @@ def test_a_deep_turn_may_take_more_steps(env):
     result, _ = run(context=make_context())
     assert result["answer"] == "研究结论" and result["audit"]["stop_reason"] is None
     assert len(fake.calls) == loop.MAX_STEPS + 5
+
+
+def test_a_guest_or_an_unattended_run_stops_at_high(env):
+    env.monkeypatch.delenv("FINBOT_KERNEL_TOP_TIER", raising=False)
+    for context in (make_context(identity_credential=""), make_context(unattended=True)):
+        fake = script(env, [step(calls=[call("c1", "escalate", {"depth": "max"})]), step(text="好")])
+        result, events = run(context=context)
+        assert result["audit"]["tier"] == "high" and _efforts(fake)[-1] == "high"
+        assert not any(e.get("event") == "narration" and "后台" in e.get("text", "") for e in events)
+
+
+def test_the_deep_note_is_said_once(env):
+    env.monkeypatch.delenv("FINBOT_KERNEL_TOP_TIER", raising=False)
+    env.monkeypatch.setenv("FINBOT_KERNEL_LOOKUP_TIER", "same")
+    fake = script(env, [step(calls=[call("c1", "escalate", {"depth": "max"})]), step(calls=[call("c2", "escalate", {"depth": "high"})]), step(text="好")])
+    result, events = run(context=make_context())
+    assert result["audit"]["tier"] == "max"
+    assert "深度研究" not in tool_message(fake, 2)["note"]
+    assert sum(1 for e in events if e.get("event") == "narration" and "后台" in e.get("text", "")) == 1

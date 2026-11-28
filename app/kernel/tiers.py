@@ -19,7 +19,7 @@ ESCALATE_SCHEMA: dict = {
         "description": "切换到更深的思考档位再继续。问题需要多步推理、比较权衡、给出判断，或者你拿不准时调用。"
                        "mid 用于一般的分析，high 用于复杂的研究。简单的问题不要调用，直接回答或查一下就答。"
                        "max 只在用户明确要深度研究时用（他自己说要深入、彻底、慢慢研究，愿意等）：这一轮会转到后台，"
-                       "最多约 15 分钟，做完推送通知他。没明说的复杂问题用 high。",
+                       "最多约 10 分钟，做完推送通知他。没明说的复杂问题用 high。",
         "parameters": {"type": "object", "properties": {"depth": {"type": "string", "enum": ["mid", "high", "max"]}},
                        "required": ["depth"], "additionalProperties": False},
     },
@@ -53,12 +53,13 @@ def escalate(run, args: dict) -> dict:
     if depth not in ("mid", "high", DEEP):
         return {"ok": False, "error_code": "invalid_arguments", "hint": "depth 必须是 mid、high 或 max。"}
     tier = clamp(depth, run.ceiling)
+    before = run.tier
     if TIERS.index(tier) > TIERS.index(run.tier):
         run.tier = tier
     if tier != depth:
         note = f"服务器设置的上限是 {tier} 档，已按 {tier} 档继续。"
     else:
         note = f"已切换到 {tier} 档，请继续。"
-    if run.tier == DEEP:
-        note += "这是深度研究：已转到后台，时间放宽到约 15 分钟，他可以先去做别的，做完会推送通知他。先列清单，再一项项做。"
+    if run.tier == DEEP and before != DEEP:
+        note += "这是深度研究：已转到后台，时间放宽到约 10 分钟，他可以先去做别的，做完会告诉他。先列清单，再一项项做。"
     return {"ok": True, "tier": run.tier, "note": note}

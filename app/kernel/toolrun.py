@@ -43,7 +43,7 @@ _SOURCE_TYPES = {"web_research": "web", "search_configured_news": "configured_ne
                 "search_x": "x_post"}
 # Run one at a time after every read has been numbered, in call order: calculations work on the citations the reads just
 # registered, and an ``act`` call may rest on what this step's reads found.
-DEEP_SENTENCE = "这是深度研究，我转到后台慢慢做（最多约 15 分钟），你可以先去忙别的，做完我会推送告诉你。"
+DEEP_SENTENCE = "这是深度研究，我转到后台慢慢做（最多约 10 分钟），你可以先去忙别的，做完我会告诉你。"
 _CALCULATIONS = ("calculate", "calculate_formula")
 
 logger = logging.getLogger(__name__)

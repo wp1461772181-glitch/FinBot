@@ -674,3 +674,31 @@ def test_a_cancel_during_start_turn_leaves_no_running_row(stream_fixture, outbox
             await asyncio.gather(pending, return_exceptions=True)
     _run(hand())
     assert _only_item(cid_t2).status == "stopped"
+
+
+@pytest.mark.parametrize("detach", [True, False])
+def test_a_deep_turn_read_to_the_end_is_pushed_only_on_the_web(stream_fixture, outbox, cid_t2, monkeypatch, detach):
+    """Deep research (tier max) said it would come back to him: on the web (a detached turn) its end is pushed even though the page
+    read it to the end; a bridge (not detached) reads its turn to the end and sends the answer itself, so no second line."""
+    _quiet(monkeypatch)
+    monkeypatch.delenv("FINBOT_FP13_DETACHED_TURNS", raising=False)
+    monkeypatch.setattr(stream, "_is_owner", lambda credential: True)
+    monkeypatch.setattr(stream, "owner_hash", lambda credential: OWNER)
+
+    async def workflow(**_):
+        yield {"event": "tier", "tier": "max"}
+        yield {"event": "delta", "text": "研究结论"}
+        yield _done()
+    monkeypatch.setattr(stream, "stream_workflow", workflow)
+
+    async def scenario():
+        body = (await _start(cid_t2, detach=detach)).body_iterator
+        [part async for part in body]
+        for pending in list(stream._BACKGROUND):
+            await asyncio.gather(pending, return_exceptions=True)
+    _run(scenario())
+    notices = _notices()
+    if detach:
+        assert len(notices) == 1 and "深度研究" in notices[0].text and "做完了" in notices[0].text
+    else:
+        assert notices == []

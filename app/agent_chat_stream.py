@@ -661,6 +661,8 @@ async def _start_turn(payload,x_chat_session,bot,chosen,model_label,cid,*,separa
   inboxes.register(cid,box)
  released=False
  reading={"on":not reader_gone}   # is a client reading this turn's stream? (the detached relay clears it when its response is dropped)
+ # A deep-research turn's end is pushed (``deep``) only for a detached turn (the web): a bridge reads its turn to the end and sends the answer itself.
+ reading["detached"]=bool(payload.detach and fp_flag("FINBOT_FP13_DETACHED_TURNS",True))
  def release_resources():
   nonlocal released
   if released:return
@@ -812,7 +814,7 @@ async def _start_turn(payload,x_chat_session,bot,chosen,model_label,cid,*,separa
      # What passes through is kept for a turn that ends without a final protocol (cancelled, failed).
      if kind=="narration":progress.setdefault("narration",[]).append(event["text"])
      else:progress[kind]=event["items"] if kind=="checklist" else event["tier"]
-     if kind=="tier" and event["tier"]=="max":reading["deep"]=True
+     if kind=="tier" and event["tier"]=="max" and reading.get("detached"):reading["deep"]=True
      yield frame(kind,{key:value for key,value in event.items() if key!="event"})
     elif kind=="client_action":
      yield frame("client_action",{key:value for key,value in event.items() if key!="event"})

@@ -33,10 +33,10 @@ GOLDEN = {
     # 5c-3c: act gains rate_alert (the system text is unchanged).
     # 5d-3a: act gains rate_answer, and each tier-1 operation's line names its arguments (the system text is unchanged).
     # 11-28 deep research: escalate takes depth max (both schemas change; the system texts are unchanged).
-    "owner": ("4d10f8fe220868a66f2c2989876a71be67ce4d0a62f1c5a5dbf1509e50073fe3",
+    "owner": ("93ab5113d69286de2f9ff319e66f9df4a33463b22bcc96a12cfb48903f3aa046",
                "a8939601bb56f0e88c086dbccfe6e622e619b16b8c19b56d48e566b558928303"),
     # 6a: a guest's system prompt gains the line about what only the owner can do (``prompt.GUEST_NOTE``); the owner's is unchanged.
-    "guest": ("a0c779722a123ed2fae23278d247acadb1c9bf29972e63d51080e5edf828eca3", "e02eb10753903050001bcd7b2958b43b174e6eb5c68cf837ae04753d8b6d3eff"),
+    "guest": ("36a4a6c9ee1cdeeef86e81be9dc5d263a22e8acb719762466120b32b39c58666", "e02eb10753903050001bcd7b2958b43b174e6eb5c68cf837ae04753d8b6d3eff"),
 }
 
 
