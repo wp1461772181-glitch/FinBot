@@ -68,7 +68,7 @@ def _window(owner_hash: str, since: datetime | None) -> list[dict]:
     """His own messages after ``since``, oldest first, the newest 300 or 60,000 characters of them (the oldest are dropped first)."""
     query = (select(AgentMessage.id, AgentMessage.content, AgentMessage.created_at)
              .join(AgentConversation, AgentConversation.id == AgentMessage.conversation_id)
-             .where(AgentConversation.owner_hash == owner_hash, owner_message_clause())
+             .where(AgentConversation.owner_hash == owner_hash, owner_message_clause(), _not_tests())
              .order_by(AgentMessage.created_at.desc(), AgentMessage.sequence.desc()))
     if since is not None:
         query = query.where(AgentMessage.created_at > since)
@@ -84,6 +84,12 @@ def _window(owner_hash: str, since: datetime | None) -> list[dict]:
             picked.append({"id": str(message_id), "content": content, "date": created.astimezone(UTC).strftime("%Y-%m-%d") if created else "",
                            "at": created.astimezone(UTC) if created else None})
     return list(reversed(picked))
+
+
+def _not_tests():
+    """His conversations, not the evaluation harness's (``AgentConversation.origin`` "ruler"): test questions are not his habits."""
+    from sqlalchemy import or_
+    return or_(AgentConversation.origin.is_(None), AgentConversation.origin != "ruler")
 
 
 def _model_for(owner_hash: str) -> dict:

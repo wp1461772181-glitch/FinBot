@@ -316,7 +316,7 @@ class StreamRequest(BaseModel):
  # FP13: asks for the turn to keep running if this connection drops; the server flag decides whether that is honoured.
  detach:bool=False
  # Where the message came from (the Telegram and WeChat bridges send theirs; the web page sends none): the model is told, a chat shows plain text.
- via:Literal["web","telegram","wechat"]|None=None
+ via:Literal["web","telegram","wechat","ruler"]|None=None
  @field_validator("base_url")
  @classmethod
  def valid_endpoint(cls,value):
@@ -573,7 +573,7 @@ async def stream_chat(payload:StreamRequest,request:Request,x_chat_session:str|N
  cid=payload.conversation_id
  if cid:
   if not await verify_conversation(cid,x_chat_session):raise HTTPException(404,"conversation_not_found")
- else:cid=await create_conversation(x_chat_session)
+ else:cid=await create_conversation(x_chat_session,origin="ruler" if payload.via=="ruler" else None)
  if not payload.pending_request_id:
   # 3c: the owner speaks while a turn of this conversation is working: it is handed to that turn (no 409).  A card press is not a message.
   running=inboxes.target(cid)

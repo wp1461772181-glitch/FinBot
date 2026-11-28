@@ -91,9 +91,14 @@ def owner_messages_since(owner_hash: str, since: datetime | None) -> int:
         return _count_messages(db, owner_hash, since)
 
 
+def _not_tests():
+    from .memory_review import _not_tests as not_tests
+    return not_tests()
+
+
 def _count_messages(db, owner_hash: str, since: datetime | None) -> int:
     query = (select(func.count()).select_from(AgentMessage).join(AgentConversation, AgentConversation.id == AgentMessage.conversation_id)
-             .where(AgentConversation.owner_hash == owner_hash, owner_message_clause()))
+             .where(AgentConversation.owner_hash == owner_hash, owner_message_clause(), _not_tests()))
     if since is not None:
         query = query.where(AgentMessage.created_at > since)
     return int(db.scalar(query) or 0)

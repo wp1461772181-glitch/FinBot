@@ -257,3 +257,27 @@ def test_a_recent_item_is_held_after_a_latest_known_block_too(env, fake_consent,
 def test_the_scene_says_once_more_how_to_read_his_message():
     line = prompt.scene_line("wechat", AT)
     assert line.endswith(prompt.READ_FIRST) and "一句话的事一句话答" in prompt.READ_FIRST and "不用问他" in prompt.READ_FIRST
+
+
+# --- section 8 item 1: the ruler's conversations are not his words -------------------------------------------------------------------
+
+def test_the_ruler_marks_its_conversations_and_the_memory_review_leaves_them_out(clean_owner):
+    import uuid as _uuid
+    from app.agent_chat_models import AgentConversation, AgentMessage
+    mine, test = _uuid.uuid4(), _uuid.uuid4()
+    with SessionLocal() as db:
+        db.add(AgentConversation(id=mine, owner_hash=clean_owner))
+        db.add(AgentConversation(id=test, owner_hash=clean_owner, origin="ruler"))
+        db.add(AgentMessage(conversation_id=mine, turn_id=_uuid.uuid4(), sequence=1, role="user", content="我自己的问题"))
+        db.add(AgentMessage(conversation_id=test, turn_id=_uuid.uuid4(), sequence=1, role="user", content="用表格列出微软去年和前年的营收。"))
+        db.commit()
+    try:
+        assert [m["content"] for m in memory_review._window(clean_owner, None)] == ["我自己的问题"]
+        from app.memory_schedule import owner_messages_since
+        assert owner_messages_since(clean_owner, None) == 1
+        assert StreamRequest(message="问题", catalog_model="", via="ruler").via == "ruler"
+    finally:
+        with SessionLocal() as db:
+            db.query(AgentMessage).filter(AgentMessage.conversation_id.in_([mine, test])).delete()
+            db.query(AgentConversation).filter(AgentConversation.id.in_([mine, test])).delete()
+            db.commit()
