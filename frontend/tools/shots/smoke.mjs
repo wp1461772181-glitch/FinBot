@@ -2220,8 +2220,8 @@ async function chatPopoverKeyboard(ctx) {
   const view = await openChat(ctx, "chat-popover-keyboard");
   try {
     const { page } = view;
-    // The model badge opens the model selector (a modal palette: [data-testid=model-picker]); the other two are the small pop panels.
-    const panels = [["model-badge", "模型与推理强度"], ["context-meter", "上下文用量"], ["about-chat", "关于这条对话"]];
+    // The model badge opens the model list (a popover above the composer: [data-testid=model-picker]); the other two are the small pop panels.
+    const panels = [["model-badge", "模型"], ["context-meter", "上下文用量"], ["about-chat", "关于这条对话"]];
     const panelOf = (id, label) => (id === "model-badge" ? page.locator("[data-testid=model-picker]") : page.locator(`[data-slot=pop-panel][aria-label="${label}"]`));
     for (const [id, label] of panels) {
       const trigger = page.locator(`[data-testid=${id}]`);
@@ -2235,23 +2235,23 @@ async function chatPopoverKeyboard(ctx) {
       await panel.waitFor({ state: "detached", timeout: 5000 });
       await focusOn(page, trigger, `${id}: focus did not return to the button after Esc`);
     }
-    // A press outside closes the model panel too (the selector is modal: its overlay takes the press, so press a corner of the page).
+    // A press outside closes the model list too (a corner of the page, away from the composer).
     await page.locator("[data-testid=model-badge]").click();
     await page.locator("[data-testid=model-picker]").waitFor({ timeout: 5000 });
     await page.mouse.click(4, 4);
     await page.locator("[data-testid=model-picker]").waitFor({ state: "detached", timeout: 5000 });
-    // Reach the strength choice by keyboard alone: Tab from the search box (where the selector opens) into the radio group.
+    // The list by keyboard alone: Enter opens it on the search box, the arrows move through the models, Enter on one chooses it.
     await page.locator("[data-testid=model-badge]").focus();
     await page.keyboard.press("Enter");
-    await page.locator("[data-testid=model-picker] [role=radio]").first().waitFor({ timeout: 10000 });
-    await page.keyboard.press("Tab");
-    assert(await page.evaluate(() => document.activeElement?.getAttribute("role") === "radio"), "Tab from the panel did not land on a choice");
+    await page.locator("[data-testid=model-picker] [cmdk-item]").first().waitFor({ timeout: 10000 });
+    assert(await page.evaluate(() => document.activeElement?.tagName === "INPUT"), "the list did not open on its search box");
     await page.keyboard.press("Escape");
-    return "model badge, context ring and ⓘ: Enter opens with focus inside, Esc closes and returns focus, a press outside closes; the choices are Tab-reachable";
+    return "model badge, context ring and ⓘ: Enter opens with focus inside, Esc closes and returns focus, a press outside closes; the model list opens on its search box";
   } finally { await view.close(); }
 }
 
-/** The composer's model selector: grouped and searchable, a model choice saves and leaves the panel open on that model's tiers, a strength choice saves and closes it, a refused save keeps it open with the reason and the badge as it was. */
+/** The composer's model list (owner 11-28: in the composer, no card of its own; no effort choice): it opens above the badge, grouped and
+ * searchable; a model choice saves and closes it; a refused save keeps it open with the reason and the badge as it was. */
 async function chatModelPicker(ctx) {
   const view = await openChat(ctx, "chat-model-picker-flow");
   try {
@@ -2274,19 +2274,18 @@ async function chatModelPicker(ctx) {
     await until(async () => (await picker.locator("[cmdk-item]").count()) === 1, "the search for glm did not leave one row");
     await input.fill("");
     await until(async () => (await picker.locator("[cmdk-item]").count()) >= 5, "clearing the search did not bring the list back");
-    // A model choice: saved, the panel stays open, the strength row is the new model's (every tier: 默认 + 7).
+    // In the composer: the list sits above the badge, with no overlay over the page, and there is no effort choice in it.
+    const listBox = await picker.boundingBox(), badgeBox = await badge.boundingBox();
+    assert(listBox && badgeBox && listBox.y + listBox.height <= badgeBox.y + 1, "the list does not open above the badge");
+    assert(!(await page.locator("[data-slot=dialog-overlay], [data-slot=drawer-overlay]").count()), "the list opened with an overlay (a card of its own)");
+    assert(!(await picker.getByRole("radio").count()) && !(await picker.getByText("推理强度").count()), "the list still offers an effort");
+    // A model choice: saved, the list closes, the badge shows the model.
     await picker.locator("[cmdk-item]", { hasText: "Muse Ember" }).click();
     await until(() => bot().model === "muse-ember", `the model saved is ${bot().model}`);
-    await until(async () => (await picker.getByRole("radio").count()) === 8, "the strength row did not become the new model's");
-    assert(await picker.isVisible(), "choosing a model closed the panel");
-    // A strength choice: saved, the panel closes, the badge says both.
-    await picker.getByRole("radio", { name: "极高", exact: true }).click();
     await picker.waitFor({ state: "detached", timeout: 5000 });
-    assert(bot().reasoning_effort === "xhigh", `the effort saved is ${bot().reasoning_effort}`);
     const text = await badge.innerText();
-    assert(/Muse Ember/.test(text) && text.includes("极高"), `the badge says ${JSON.stringify(text)}`);
-    // Reopening starts the highlight on the current model, not on the row hovered last time; Tab from the strength row wraps
-    // back to the search box (the dialog's focus trap still sees it).
+    assert(/Muse Ember/.test(text), `the badge says ${JSON.stringify(text)}`);
+    // Reopening starts the highlight on the current model, not on the row hovered last time.
     await badge.click();
     await picker.waitFor({ timeout: 10000 });
     await picker.locator("[cmdk-item][data-value=\"haiku-5.5\"]").hover();
@@ -2295,9 +2294,6 @@ async function chatModelPicker(ctx) {
     await badge.click();
     await picker.waitFor({ timeout: 10000 });
     await until(async () => (await picker.locator("[cmdk-item][data-selected=true]").getAttribute("data-value")) === "muse-ember", "reopening did not start the highlight on the current model");
-    await picker.getByRole("radio", { checked: true }).focus();
-    await page.keyboard.press("Tab");
-    assert(await picker.locator("input").evaluate((el) => el === document.activeElement), "Tab from the strength row did not wrap back to the search box");
     await page.keyboard.press("Escape");
     await picker.waitFor({ state: "detached", timeout: 5000 });
     // A refused save keeps the panel open, says why, and leaves the badge and the record alone.
@@ -2309,7 +2305,7 @@ async function chatModelPicker(ctx) {
     assert(await picker.isVisible(), "a refused save closed the panel");
     assert(bot().model === "muse-ember" && /Muse Ember/.test(await badge.innerText()), "a refused save changed the badge or the record");
     mock.control.fail = null;
-    return `search, a model choice (panel stays, 8 tiers), a strength choice (saved: ${bot().model} / ${bot().reasoning_effort}, panel closes), a refused save (panel open with the reason, nothing changed)`;
+    return `above the badge with no overlay and no effort, search, a model choice (saved: ${bot().model}, the list closes), a refused save (list open with the reason, nothing changed)`;
   } finally { await view.close(); }
 }
 
@@ -5203,7 +5199,8 @@ const OLD_FORM_FIELDS = [
   { old: "形状（8 种）", find: (p) => p.locator("[data-testid=look-shape] [data-option]"), count: 8, section: "look", edit: (p) => p.locator("[data-testid=look-shape] [data-option=nuage]").click() },
   { old: "颜色（12 种）", find: (p) => p.locator("[data-testid=look-color] [data-option]"), count: 12, section: "look", edit: (p) => p.locator("[data-testid=look-color] [data-option=violet]").click() },
   { old: "模型", find: (p) => p.getByRole("combobox", { name: "模型" }), section: "model", edit: (p) => chooseOption(p, "model-select", /Muse Ember/) },
-  { old: "（新）推理强度", find: (p) => p.getByRole("combobox", { name: "推理强度" }), section: "model", edit: (p) => chooseOption(p, "effort-select", /^高/) },
+  // 推理强度 was taken off the page 11-28 (depth is the model's call); in its place a line that says so.
+  { old: "（新）思考深度不用设置", find: (p) => p.locator("[data-testid=effort-note]"), section: "model", edit: null },
   { old: "工具范围（每个工具一个开关）", find: (p) => p.locator("[data-tool]"), count: 6, section: "tools", edit: (p) => p.locator("[data-tool=create_forecast]").click() },
   { old: "全部打开", find: (p) => p.getByRole("button", { name: "全部打开" }), section: "tools", edit: null },
   { old: "每日通知上限", find: (p) => p.getByLabel("每日通知上限", { exact: true }), section: "notify", edit: (p) => p.getByLabel("每日通知上限", { exact: true }).fill("9") },
@@ -5294,19 +5291,16 @@ async function botSettingsSaveBody(ctx) {
       done.push(`${c.name} (no change)`);
     } finally { await view.close(); }
   }
-  // the reasoning effort: new on this page.  Untouched it is not in the body; picked it is, and 默认 is null.
-  const view = await settingsView(ctx, "bot-settings-save-body: effort", BOT.applebot);
+  // No effort on the page (11-28): there is no control to send it, and a save never carries it.
+  const view = await settingsView(ctx, "bot-settings-save-body: no effort", BOT.applebot);
   try {
-    await chooseOption(view.page, "effort-select", /^高/);
-    const high = await pressSave(view);
-    assert(high.reasoning_effort === "high", `picking 高 sent reasoning_effort ${JSON.stringify(high.reasoning_effort)}`);
-    assert(canon({ ...high, reasoning_effort: undefined }) === canon({ ...JSON.parse(BOT_SAVE_BASELINE.noop.bodies[0]) }), "the rest of the body differs from the old form's");
-    await chooseOption(view.page, "effort-select", /^默认/);
-    const back = await pressSave(view);
-    assert("reasoning_effort" in back && back.reasoning_effort === null, `picking 默认 again sent reasoning_effort ${JSON.stringify(back.reasoning_effort)}, not null`);
-    done.push("effort 高 → 默认 (null)");
+    assert(!(await view.page.locator("[data-testid=effort-select]").count()), "the effort select is still on the page");
+    await chooseOption(view.page, "model-select", /Muse Ember/);
+    const saved = await pressSave(view);
+    assert(!("reasoning_effort" in saved), `a save sent reasoning_effort ${JSON.stringify(saved.reasoning_effort)}`);
+    done.push("no effort control, a save never carries it");
   } finally { await view.close(); }
-  return `${SAVE_CASES.length} edits: bodies equal the old form's (field by field, ${done.length - SAVE_CASES.length} more cases: edits back to the start offer no save; effort sends only when changed, 默认 is null)`;
+  return `${SAVE_CASES.length} edits: bodies equal the old form's (field by field, ${done.length - SAVE_CASES.length} more cases: edits back to the start offer no save; no effort control and no effort in a save)`;
 }
 
 async function botSettingsDiscard(ctx) {
@@ -6233,15 +6227,14 @@ async function settingsModelBadge(ctx) {
     const { page } = view;
     await openSection(page, "model");
     await chooseOption(page, "model-select", /Muse Ember/);
-    await chooseOption(page, "effort-select", /^高/);
     const body = await pressSave(view);
-    assert(body.model === "muse-ember" && body.reasoning_effort === "high", `the save sent model ${body.model} / effort ${body.reasoning_effort}`);
+    assert(body.model === "muse-ember" && !("reasoning_effort" in body), `the save sent model ${body.model} / effort ${body.reasoning_effort}`);
     await page.locator("[data-testid=back-to-chat]").click();
     await page.locator("[data-testid=model-badge]").waitFor({ timeout: 15000 });
     const badge = (await page.locator("[data-testid=model-badge]").innerText()).trim();
-    assert(/muse[- ]ember/i.test(badge) && badge.includes("高"), `the badge on the chat page says ${JSON.stringify(badge)}, not Muse Ember / 高`);
-    // and the other way round: the badge's own panel changes the same record, and the settings page reads it
-    return `settings: Muse Ember + 高 saved → back on the chat page the badge says ${JSON.stringify(badge)}`;
+    assert(/muse[- ]ember/i.test(badge), `the badge on the chat page says ${JSON.stringify(badge)}, not Muse Ember`);
+    // and the other way round: the badge's own list changes the same record, and the settings page reads it
+    return `settings: Muse Ember saved → back on the chat page the badge says ${JSON.stringify(badge)} (no effort on either: 11-28)`;
   } finally { await view.close(); }
 }
 
@@ -11904,7 +11897,7 @@ const CHECKS = [
   ["stop-button: the send position becomes stop while an answer runs and stop is the old cancel", stopButton],
   ["copy-toast: copying shows a toast and adds no text to the thread", copyToast],
   ["chat-popover-keyboard: the composer panels and the header ⓘ open from the keyboard, Esc closes and returns focus", chatPopoverKeyboard],
-  ["chat-model-picker: the model selector is grouped and searchable; a model choice stays open, a strength choice closes, a refused save changes nothing", chatModelPicker],
+  ["chat-model-picker: the model list opens above the badge in the composer (no card), grouped and searchable; a model choice saves and closes it, a refused save changes nothing", chatModelPicker],
   ["chat-question-rail: markers on the left edge, preview card, bookmark kept, click scrolls", chatQuestionRail],
   ["markdown-chunk: the renderer is prefetched at launch; a skeleton while it is late; plain text and 重试 when it fails", markdownChunk],
   ["citation-jump: a click on [2] opens the panel on 来源, scrolls to card 2 and marks it once", citationJump],
@@ -11988,7 +11981,7 @@ const CHECKS = [
   ["motion-auto-runtime: with the CPU slowed the avatar's frames average over 24 ms for 2 s: lite for the visit, one toast with 改回, never stored, never for a hand-picked level", motionAutoRuntime],
   ["motion-off-equals-reduced: chat-default, an answer in progress, a card waiting for you and the settings page are the same pixels under the system's reduced motion and under 关闭 in the app", motionOffEqualsReduced],
   ["bot-settings-fields: every field of the old 档案 form is on the new page, in the section the design gives it, and is a change the save bar sees; 技能 / 例行任务 / Telegram / 删除 are there", botSettingsFields],
-  ["bot-settings-save-body: eleven edits send the old form's request bodies field by field; edits that end where they began offer no save; the effort goes only when changed, 默认 is null", botSettingsSaveBody],
+  ["bot-settings-save-body: eleven edits send the old form's request bodies field by field; edits that end where they began offer no save; no effort control and no effort in a save", botSettingsSaveBody],
   ["bot-settings-discard: 放弃 puts name, tags, tool scope and model back, sends nothing, and leaving is free after it", botSettingsDiscard],
   ["bot-settings-leave-guard: an unsaved edit: sidebar, Esc, back button and command palette raise the question (留下 keeps address and edit), a reload raises beforeunload, 放弃修改并离开 leaves, a saved form leaves silently", botSettingsLeaveGuard],
   ["bot-settings-default-undeletable: the default bot's 删除 is disabled with its reason (no dialog, no request), no 在侧栏隐藏, Telegram is the explanation only", botSettingsDefaultUndeletable],
@@ -12010,7 +12003,7 @@ const CHECKS = [
   ["all-bots-unhide: a hidden bot is found and unhidden ({hidden:false}), the sidebar has it at once, 撤销 hides it again; 在侧栏隐藏 and its 撤销 the other way", allBotsUnhide],
   ["all-bots-states: skeleton cards, an error bar with 重试, the empty state, and 需要登录 for a guest", allBotsStates],
   ["all-bots-keyboard: the page is done with the keyboard alone (新建 bot, the cards' names and menus, 取消隐藏, Esc returns the focus)", allBotsKeyboard],
-  ["bot-settings-model-badge: a model and effort saved on the settings page are what the chat page's model badge says", settingsModelBadge],
+  ["bot-settings-model-badge: a model saved on the settings page is what the chat page's model badge says", settingsModelBadge],
   ["watchlist-add-remove-sync: add / remove (asked first) / undo each save the queue with the old body byte for byte; refusals say why and save nothing; the order is kept", watchlistAddRemoveSync],
   ["company-symbol-in-url: the company and its tab are in the address: a reload stays, a tab press is a history entry, back returns, arrows only move, the picker keeps the tab", companySymbolInUrl],
   ["company-init-prices: no candles: 初始化一年行情 in the market card; a failure toasts and keeps the button; the press POSTs once, then the chart and the price appear", companyInitPrices],
