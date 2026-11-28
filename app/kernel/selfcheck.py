@@ -9,7 +9,9 @@ Two checks, no model call:
   date: the replay reads 5-minute bars and the live loop 1-minute bars, so a different alert on the same symbol is not a miss.
 
 The sentinel's database is opened read-only.  Each check runs in its own ``try``: one that fails leaves its error under
-``checked["errors"]`` and the other still runs.  The findings ride in the next morning brief (``kernel.brief``).
+``checked["errors"]`` and the other still runs.  The findings ride in the next morning brief (``kernel.brief``), and each one is also
+handed to the duty turn as a missed alert to send again (design 7.2: 「漏了就补发并说明」, ``resend``): it says it is late and why, then
+tells it as it would have (the cause of a move, what a filing says).  Before 08:00 Beijing its message waits for the morning brief.
 """
 from __future__ import annotations
 
@@ -200,7 +202,8 @@ def price_findings(day: date, snapshot: dict, sentinel_db, fetch=None) -> tuple[
         told.update(names)
         text = alert.get("text") or ""
         findings.append({"kind": "price", "symbol": alert["symbol"], "at": datetime.fromtimestamp(alert["ts"], ET).strftime(MINUTE),
-                         "text": text.strip().splitlines()[0] if text.strip() else "",
+                         "text": text.strip().splitlines()[0] if text.strip() else "", "tier": alert.get("tier"),
+                         "members": [s for s in names if s != alert["symbol"]] or None,
                          "why": f"replayed kind={alert.get('kind')} tier={alert.get('tier')}; no live alert on it that New York date"})
     checked = {"price_symbols": symbols, "replayed": len(counted), "live": live_rows}
     if data.get("errors"):
@@ -256,6 +259,49 @@ def _run(row_id: int, owner: str, now: datetime, since: datetime | None, sentine
         checked["errors"]["price"] = _error(exc)
     findings.sort(key=lambda f: (f.get("kind") or "", f.get("at") or ""))       # earnings (Beijing times) first, then prices (New York times)
     return finish(outcome="done", session=session.isoformat() if session else None, findings=findings, checked=checked)
+
+
+# --- sending a missed alert again ---------------------------------------------------------------------------------------------
+
+RESEND_BASE = 2**40        # a resent finding's alert id: above any the sentinel will reach, one per (check, finding), so it is judged once
+
+
+def resend_event(row: dict, index: int, finding: dict, held: set[str], now: datetime) -> dict:
+    """The wake event of one finding: kind ``missed``, its own line as the text, the finding under ``missed``.  ``deferred`` (not sent
+    yet, so before 08:00 Beijing the duty's message waits for the morning brief instead of going out at night)."""
+    from .brief import selfcheck_lines
+    line = selfcheck_lines([finding]).splitlines()[-1].lstrip("· ")
+    hour = now.astimezone(BEIJING).hour
+    event = {"alert_id": RESEND_BASE + int(row["id"]) * 100 + index, "symbol": finding.get("symbol") or "", "kind": "missed",
+             "text": f"【漏报补发】{line}", "held": (finding.get("symbol") or "") in held, "deferred": hour < 8,
+             "missed": {key: finding.get(key) for key in ("kind", "at", "why", "url", "accession") if finding.get(key)}}
+    if isinstance(finding.get("tier"), int) and not isinstance(finding.get("tier"), bool):
+        event["tier"] = finding["tier"]          # a missed move asks for its cause like a live one (wake's tier_label)
+    if finding.get("members"):
+        event["members"] = [finding["symbol"], *finding["members"]]
+    return event
+
+
+async def resend(row: dict | None, owner: str, now: datetime, snapshot: dict | None = None) -> list[dict]:
+    """Hand every finding of a finished check to the duty turn, one after another; returns their ``duty_log`` rows.  A finding already
+    judged (the same check run again) is not judged twice: wake keeps one row per alert id."""
+    if not row or row.get("outcome") != "done" or not row.get("findings"):
+        return []
+    if snapshot is None:
+        try:
+            snapshot = json.loads(sentinel_bridge.snapshot_path().read_text(encoding="utf-8"))
+        except Exception:
+            snapshot = {}
+    held = held_symbols(snapshot)
+    judged = []
+    for index, finding in enumerate(row["findings"][:100]):
+        if not finding.get("symbol"):
+            continue
+        try:
+            judged.append(await wake.wake(resend_event(row, index, finding, held, now), owner_hash=owner))
+        except Exception:
+            logger.exception("missed-alert check: finding %s could not be sent again", index)
+    return judged
 
 
 def run_once(owner: str, now: datetime, *, day: str | None = None, since: datetime | None = None, sentinel_db=None,
