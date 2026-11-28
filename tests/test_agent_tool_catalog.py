@@ -53,6 +53,7 @@ WRITE_ARGUMENTS={
  'rate_alert':{'verdict':'not_useful','symbol':'INTC','quote':'刚才英特尔那条没用'},
  'rate_answer':{'verdict':'bad','reason':'数据太旧了'},
  'report_missed':{'what':'英伟达 11-17 跌了 6% 没提醒我','symbol':'NVDA'},
+ 'follow_up':{'what':'看 ARDT 财报后的股价反应','due':'2099-01-02 09:00'},'cancel_follow_up':{'follow_up_id':7},
  'set_watch_rule':{'symbol':'INTC','metric':'day_change','levels':[{'threshold':10,'level':'remind'}],'quote':'英特尔涨跌 10% 提醒我'},'delete_watch_rule':{'rule_id':'11111111-1111-4111-8111-111111111111'},
  'set_watch_preset':{'key':'concentration','enabled':False},'set_alert_settings':{'sensitivity':'quiet'},
 }

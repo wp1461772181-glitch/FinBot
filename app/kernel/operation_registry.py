@@ -157,13 +157,15 @@ OPERATION_REGISTRY: dict[tuple[str, str], dict] = {
     ("POST", "/agent-chat/public-marks/resume"): _no("恢复展示要人亲自给出回放引用"),
     ("POST", "/agent-chat/internal/sentinel/events"): _no("机器接口，只收回环地址加密令，不是用户操作"),
     ("PUT", "/agent-chat/local-model-profiles"): _no("只在本机开发模式开启，公开模式下直接 404"),
+    ("DELETE", "/agent-chat/follow-ups/{follow_up_id}"): _op("cancel_follow_up"),
     ("PUT", "/agent-chat/permission-mode"): _no("放行档位是安全设置，只由 owner 在设置页上改，助手不能替他放宽"),
 }
 
 # Operations ``act`` has that no HTTP route corresponds to; naming one here keeps the "every operation is on a route" check honest.
 # ``record_view`` and ``drop_view`` have the memory page's two view writes since 4e.  ``report_missed`` (11-28) has no page: 「这事怎么没告诉我」
 # is said in a conversation, and the rows are read by ``scripts.missed_reports``.
-KERNEL_ONLY_OPERATIONS: frozenset[str] = frozenset({"report_missed"})
+# ``follow_up`` (11-28) is its own promise, made in a conversation: the page only lists and cancels them.
+KERNEL_ONLY_OPERATIONS: frozenset[str] = frozenset({"report_missed", "follow_up"})
 
 
 def operations_of(entry: dict) -> tuple[str, ...]:

@@ -37,7 +37,8 @@ ACT = "act"
 # into his 资料库 and so into later answers (11-28 review).
 PUBLIC_FETCH = ("fetch_sec", "refresh_sec", "scan_official", "initialize_prices")
 OFFICIAL_FETCH = PUBLIC_FETCH
-TIER1 = ("remember", "forget", "add_to_research_queue", "remove_from_research_queue", "rate_alert", "rate_answer", "report_missed", "record_view", "drop_view",
+TIER1 = ("remember", "forget", "add_to_research_queue", "remove_from_research_queue", "rate_alert", "rate_answer", "report_missed", "follow_up",
+         "cancel_follow_up", "record_view", "drop_view",
          *PUBLIC_FETCH)
 TIER2 = ("record_trade", "set_available_funds", "set_position_plan", "create_routine", "update_routine", "delete_routine",
          "save_skill", "review_filing", "create_bot", "update_bot", "delete_transaction", "manage_skill", "set_default_model", "set_model_role",
@@ -69,6 +70,8 @@ SUMMARIES = {
     "remove_from_research_queue": "把一只股票移出研究队列",
     "rate_alert": "记下用户对某条提醒、值班消息或早间简报的『有用／没用』（他这轮亲口说的；不写股票就是最近一条）。不用先查提醒列表：代码会自己找到最近 48 小时里对得上的那条，并在结果里写明是哪一条。记下后照工具返回的那句告诉他对上的是哪一条，对错了他会说。他想顺便调提醒的门槛，记下之后再问。",
     "rate_answer": "记下用户对这段对话里上一条回答的『好／不好』（他这轮亲口说的；说的是你之前那条回答，不是正在写的这条），不好时可以带上他说的原因。他评价你上一条回答本身（不好、答错了、没说清、没用）时，就是在给它评价：先记下『不好』（原因用他的话；哪怕你觉得他说得不对，这也是他的评价，照记，再解释），再照常改正或补充；他夸上一条答得好，就记『好』。他只是回答你的提问（你问「是指苹果吗」，他说「不对，是微软」）、纠正他自己的问题、或者接着往下问，都不是评价，不要记。这些评价进质量统计，用来改进你。代码会自己找到那条回答，并在结果里写明是哪一条（第一句和时间）；记下后照工具返回的那句告诉他。",
+    "follow_up": "答应他回头再看的事，记下来真的做到：你在回答里说「过两天再看一眼」「财报出来后我再看」时，记下看什么、北京时间什么时候。到时系统叫你回来看，有新东西才告诉他。不改他的任何东西；同时最多 5 件，一天最多发一次",
+    "cancel_follow_up": "取消一件记着要回头看的事（他说不用了，或已经没意义了）",
     "report_missed": "记下用户说的『这事怎么没告诉我』：他认为该告诉他、但没告诉的一件事（他这轮亲口说的）。只是记进漏报记录，用来以后改进提醒，不改任何设置。记下后用 query_alerts 查一下当时为什么没提醒，如实告诉他；他自己的一条规则能盯住的，再用 set_watch_rule 提议一条。",
     "record_view": "记下用户对某家公司的看法（他自己的话，一家一条；新的覆盖旧的，旧的留在历史里；不是证据，也不授权任何操作）。记下后在回答里告诉他「我记下了：……」",
     "drop_view": "撤回用户对某家公司已记下的看法（留在历史里，标为已撤回）",
@@ -368,6 +371,35 @@ async def _forget(run, args: dict) -> dict:
     else:
         alternative = "忘掉后这条不再用于回答；记忆页里仍能看到它的归档记录。"
     return {"title": texts.WRITE_TITLES["forget"], "targets": [{"title": item["text"]}], "alternative": alternative}
+
+
+FOLLOW_UP_HINTS = {"due_too_soon": "至少要在 30 分钟以后：现在就能看的，现在就看。", "due_too_far": "最多记 30 天以内的事。",
+                   "too_many_follow_ups": "已经记着 5 件要回头看的事了：先取消一件，或者不记这件。", "invalid_due": "due 写成北京时间 YYYY-MM-DD HH:MM。",
+                   "follow_up_not_found": "没有这件记着的事（可能已经做过或取消了）。"}
+
+
+async def _follow_up(run, name: str, args: dict, operation: dict) -> dict:
+    """``follow_up``: its own promise, checked against the limits now (so a refusal is said in this turn); ``cancel_follow_up``: one of the
+    open ones the turn was shown."""
+    from .. import follow_ups
+    owner = run.context.owner_hash
+    if name == "cancel_follow_up":
+        found = next((i for i in await asyncio.to_thread(follow_ups.open_items, owner) if i["id"] == args["follow_up_id"]), None)
+        if found is None:
+            return _failure("follow_up_not_found", reason=FOLLOW_UP_HINTS["follow_up_not_found"], hint=FOLLOW_UP_HINTS["follow_up_not_found"])
+        return {"title": "取消跟进", "targets": [{"title": found["what"], **({"symbol": found["symbol"]} if found.get("symbol") else {})}],
+                "alternative": UNDO["cancel_follow_up"]}
+    try:
+        due = follow_ups.parse_due(args["due"])
+        await asyncio.to_thread(follow_ups.check, owner, due)
+    except ValueError as exc:
+        code = str(exc)
+        return _failure(code, reason=FOLLOW_UP_HINTS.get(code, code), hint=FOLLOW_UP_HINTS.get(code, code))
+    operation["conversation_id"], operation["turn_id"] = str(run.context.conversation_id or ""), getattr(run, "turn_id", "")
+    operation["quote"] = str(getattr(run, "question", "") or "")[:500]
+    operation["bot_id"] = getattr(run.context, "bot_id", None)
+    return {"title": "记下要回头看的事", "targets": [{"title": args["what"], **({"symbol": args["symbol"].upper()} if args.get("symbol") else {})}],
+            "alternative": f"北京时间 {follow_ups.due_label(due)} 回来看；有新东西才告诉他。{UNDO['follow_up']}"}
 
 
 VIEW_OPERATIONS = ("record_view", "drop_view")
@@ -762,6 +794,10 @@ async def prepare(run, name: str, arguments) -> Prepared | dict:
         display = await _rate_answer(run, args, operation)
         if "error_code" in display:
             return display
+    elif name in ("follow_up", "cancel_follow_up"):
+        display = await _follow_up(run, name, args, operation)
+        if "error_code" in display:
+            return display
     elif name == "report_missed":
         # where he said it, and his words as he typed them: the code keeps them, the model is not asked to copy them
         operation["conversation_id"], operation["turn_id"] = str(run.context.conversation_id or ""), getattr(run, "turn_id", "")
@@ -866,6 +902,8 @@ UNDO = {
     "rate_alert": "说错了就说『那条改成有用／没用』。",
     "rate_answer": "说错了就说『那条改成好的／不好』；网页上那条回答下的按钮也能改。",
     "report_missed": "这只是一条漏报记录，用来改进提醒，不会改变任何设置。",
+    "follow_up": "到时我会回来看，有新东西才告诉他。他说「不用跟进了」就用 cancel_follow_up 取消。",
+    "cancel_follow_up": "已经取消，不会再回来看这件事。要的话再说一次。",
 }
 # 11-28 review: in the full mode (or after his 「直接做」) tier 2 and 3 run at once too, and the answer says honestly what can be undone.
 _PAID_UNDO = "已经调用模型做完了，花掉的费用退不回来；结果不想要可以不用。"
@@ -1060,6 +1098,9 @@ def _direct_after_reads(run, prepared: Prepared) -> bool:
     operation = prepared.operation
     if operation["name"] in OFFICIAL_FETCH:
         return True          # official material a page cannot choose; nothing of his changes
+    if operation["name"] in ("follow_up", "cancel_follow_up"):
+        # Its own promise to look again: nothing of his changes, and what a page said can at most make it look at something once more.
+        return True
     if operation["name"] == "report_missed":
         # 11-28 shadow: it looked up the filing first, then the record waited on a card for him to press.  The record holds his own words,
         # taken by the code from his message, and changes nothing else: a page it read cannot put words in his mouth.

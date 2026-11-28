@@ -137,6 +137,7 @@ async def execute_reversible(operation,key,context,*,emit=None,overrides=None):
         if name=='rate_answer':args['_match']=operation.get('match')
         # Where he said it: the record keeps the conversation and the turn.
         if name=='report_missed':args['_conversation_id']=operation.get('conversation_id');args['_turn_id']=operation.get('turn_id');args['_quote']=operation.get('quote')
+        if name=='follow_up':args['_conversation_id']=operation.get('conversation_id');args['_turn_id']=operation.get('turn_id');args['_quote']=operation.get('quote');args['_bot_id']=operation.get('bot_id')
         # A bot card freezes the fields it showed (the focus carried over from the bot as it was): the press writes exactly those.
         if name in {'create_bot','update_bot','apply_role_template','undo_role_template','set_watch_rule','set_watch_preset','set_alert_settings'}:args['_fields']=operation.get('fields')
         # The old state the card showed: a press whose card is no longer true is refused (directory_ops.is_stale).
@@ -500,6 +501,19 @@ async def _dispatch(name,args,context,is_owner,emit,page_chars=None):
         except ValueError as exc:return error(str(exc))
         if row is None:return rate_answer_refusal()
         return result([{'status':'recorded','recorded':rate_answer_line(match,args['verdict'],row.get('reason')),'message_id':row['message_id']}],'answer feedback')
+    if name in {'follow_up','cancel_follow_up'}:
+        # Only reached through execute_reversible (the kernel's tier 1 or a pressed card): its own promise to look again, or dropping one.
+        from .. import follow_ups
+        if not is_owner:return error('owner_login_required')
+        try:
+            if name=='cancel_follow_up':
+                row=await asyncio.to_thread(follow_ups.cancel,context.owner_hash,args['follow_up_id'])
+                if row is None:return error('follow_up_not_found')
+                return result([{'status':'cancelled','id':row['id'],'what':row['what']}],'follow-ups')
+            row=await asyncio.to_thread(follow_ups.add,context.owner_hash,args['what'],follow_ups.parse_due(args['due']),symbol=args.get('symbol'),
+                                        bot_id=args.get('_bot_id'),conversation_id=args.get('_conversation_id'),turn_id=args.get('_turn_id'),quote=args.get('_quote'))
+        except ValueError as exc:return error(str(exc))
+        return result([{'status':'kept','id':row['id'],'what':row['what'],'due':row['due_label']}],'follow-ups')
     if name=='report_missed':
         # Only reached through execute_reversible (the kernel's tier 1 or a pressed card): his 「这事怎么没告诉我」, in his words.
         from .. import missed_reports

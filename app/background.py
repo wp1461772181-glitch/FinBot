@@ -206,6 +206,19 @@ def _tell_once(message: str) -> None:
         log.info(message)
 
 
+FOLLOW_UP_SECONDS = 300
+
+
+def run_follow_ups() -> None:
+    """What the kernel said it would look at again (app.follow_ups): a due one goes to the duty turn, at most one a Beijing day, 08–22."""
+    from . import follow_ups
+    from .sentinel_bridge import owner_hash_from_login_config
+
+    owner = owner_hash_from_login_config()
+    if owner:
+        follow_ups.run_due(owner)
+
+
 def run_knowledge_index() -> None:
     """The knowledge index's write side on the box (app.knowledge.box_index): new sources synced, chunked, embedded and written to
     pgvector.  Off with FINBOT_KNOWLEDGE_INDEX=off; does nothing where its tokenizer and the two login files are not (a checkout, CI)."""
@@ -251,6 +264,7 @@ LOOPS = (
     ("earnings-calendar", EARNINGS_CALENDAR_SECONDS, run_earnings_calendar),
     ("earnings-prep", PREP_SECONDS, run_earnings_prep),
     ("knowledge-index", KNOWLEDGE_INDEX_SECONDS, run_knowledge_index),
+    ("follow-ups", FOLLOW_UP_SECONDS, run_follow_ups),
 )
 
 

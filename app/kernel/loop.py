@@ -653,10 +653,66 @@ async def _latest_block(run: "_Run", text: str, previous: str | None, focus: str
     return found
 
 
-def _scene(context) -> str | None:
-    """「此刻」 for this turn (``prompt.scene_line``); ``FINBOT_KERNEL_SCENE=off`` leaves it out (the kernel's tests describe the messages without it)."""
+async def _scene(run, context, owner: bool) -> str | None:
+    """「此刻」 for this turn (``prompt.scene_line``), and for the owner how long it has been since he last wrote here and what it sent him
+    meanwhile (「这段时间」, plan D2), and what it keeps to look at again (``follow_ups.open_lines``).  ``FINBOT_KERNEL_SCENE=off`` leaves
+    it all out (the kernel's tests describe the messages without it).  Nothing here may stop a turn: a part that cannot be read is left out."""
     from ..agent_workflow.fp_flags import flag
-    return prompt.scene_line(getattr(context, "via", None)) if flag("FINBOT_KERNEL_SCENE", True) else None
+    if not flag("FINBOT_KERNEL_SCENE", True):
+        return None
+    parts = [prompt.scene_line(getattr(context, "via", None))]
+    if owner:
+        try:
+            since = await asyncio.to_thread(_since_last, getattr(context, "owner_hash", ""), getattr(context, "conversation_id", ""), run.turn_id)
+            if since:
+                parts.append(since)
+        except Exception:
+            logger.exception("kernel scene: the time since the last message could not be read")
+        from .. import follow_ups
+        kept = await asyncio.to_thread(follow_ups.open_lines, getattr(context, "owner_hash", ""))
+        if kept:
+            parts.append(kept)
+    return "\n".join(parts)
+
+
+GAP_HOURS = 6
+
+
+def _since_last(owner_hash: str, conversation_id: str, turn_id: str) -> str | None:
+    """「这段时间」: his previous message in this conversation, if it was GAP_HOURS or more ago, and how many messages it sent him since."""
+    import uuid as _uuid
+    from datetime import UTC, datetime
+
+    from sqlalchemy import func, select
+
+    from ..agent_chat_models import AgentMessage, AgentTelegramMessage
+    from ..database import SessionLocal
+    try:
+        conversation = _uuid.UUID(str(conversation_id))
+    except ValueError:
+        return None
+    current = None
+    try:
+        current = _uuid.UUID(str(turn_id)) if turn_id else None
+    except ValueError:
+        pass
+    with SessionLocal() as db:
+        query = select(func.max(AgentMessage.created_at)).where(AgentMessage.conversation_id == conversation, AgentMessage.role == "user")
+        if current is not None:
+            query = query.where(AgentMessage.turn_id != current)
+        last = db.scalar(query)
+        if last is None:
+            return None
+        now = datetime.now(UTC)
+        hours = (now - last).total_seconds() / 3600
+        if hours < GAP_HOURS:
+            return None
+        sent = int(db.scalar(select(func.count(func.distinct(func.coalesce(AgentTelegramMessage.group_id, AgentTelegramMessage.id)))).where(
+            AgentTelegramMessage.owner_hash == owner_hash, AgentTelegramMessage.created_at > last,
+            AgentTelegramMessage.source.notin_(("reply", "sentinel")))) or 0)
+    gap = f"{int(hours // 24)} 天" if hours >= 48 else f"{int(hours)} 小时"
+    told = f"这期间你主动发给过他 {sent} 条消息（异动解读、简报这类）。" if sent else ""
+    return f"他上次在这个对话里说话是 {gap}前。{told}觉得值得就自然地接上（比如之前聊的事有了变化），不用强行寒暄。"
 
 
 def note_latest(run: "_Run", symbols: list[str]) -> None:
@@ -740,7 +796,7 @@ async def _run_turn(question: str, context, emit, messages: list[dict] | None = 
         latest = await _latest_block(run, run.question if fact else question, _previous_user_message(history, run.question if fact else question, original=bool(fact)),
                                      company.get("symbol") if isinstance(company, dict) else None, owner)
         run.messages = prompt.build_messages(question, context, history, fact=fact, skill=started, latest=latest, helper=helper.DELEGATE in run.tool_names,
-                                           tier=run.start_tier, scene=_scene(context))
+                                           tier=run.start_tier, scene=await _scene(run, context, owner))
         if started:
             run.outside_in_prompt = True     # a skill's steps can be imported text
         if started and owner_credential_matches(getattr(context, "identity_credential", "")):
