@@ -24,6 +24,25 @@ def publication_time(value):
         try:parsed=datetime.fromisoformat(str(value or '').strip().replace('Z','+00:00'))
         except ValueError:raise ValueError('invalid_published_at')
     return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
+ARGUMENT_PROBLEMS={'extra_forbidden':'这个工具没有这个参数','missing':'缺少这个必填参数'}
+
+def argument_error(name,exc):
+    """``invalid_arguments`` that says what was wrong: each offending argument and why, and the arguments this tool takes, so the
+    model can correct the call instead of giving up on the tool (11-27: ``days_back`` sent to search_configured_news)."""
+    out=error('invalid_arguments')
+    problems=[]
+    for item in (exc.errors() if hasattr(exc,'errors') else [])[:8]:
+        field='.'.join(str(part) for part in item.get('loc') or ()) or '(整体)'
+        problems.append({'argument':field,'problem':ARGUMENT_PROBLEMS.get(item.get('type'),str(item.get('msg') or '')[:120])})
+    policy=definitions().get(name)
+    if policy is not None:
+        schema=policy.args_schema.model_json_schema()
+        required=set(schema.get('required') or ())
+        out['accepted_arguments']=[f'{key}（必填）' if key in required else key for key in (schema.get('properties') or {})]
+    if problems:out['problems']=problems
+    out['hint']='按 problems 改正参数后重新调用；这个工具能用的参数见 accepted_arguments。'
+    return out
+
 def error(code):
     hint='请修正参数或选择已返回的来源；没有资料时可先联网查找。'
     if code=='write_tool_not_granted':hint='用 request_action 请求用户批准'
@@ -92,7 +111,7 @@ async def invoke(name,args,context,*,emit=None,page_chars=None):
     scope=getattr(context,'tool_scope',None)
     if scope is not None and name not in scope:return error('tool_not_in_bot_scope')
     try:args=validate(name,args)
-    except Exception:return error('invalid_arguments')
+    except Exception as exc:return argument_error(name,exc)
     policy=definitions()[name];is_owner=owner_credential_matches(context.identity_credential)
     if not is_owner and not policy.guest:return error('owner_login_required')
     if policy.level=='costly' or (policy.level=='reversible' and is_owner):return error('confirmation_required')
