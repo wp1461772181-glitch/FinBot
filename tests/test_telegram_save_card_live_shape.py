@@ -19,7 +19,6 @@ import pytest
 from app.agent_chat_store import owner_hash
 from app.agent_chat_models import AgentResearchQueue
 from app.agent_workflow import consent, tools
-pass  # (removed import of the old turn)
 from app.agent_workflow.models import AgentConsent, AgentWebSource
 from app.agent_workflow.state import AgentRuntimeContext
 from app.database import Base, engine

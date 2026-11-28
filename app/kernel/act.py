@@ -787,7 +787,7 @@ async def prepare(run, name: str, arguments) -> Prepared | dict:
                            alternative=texts.routine_created(preview, skills))
         elif name == "save_skill":
             display.update(title=f'{title} · {args["name"]}', targets=[{"kind": args["description"]}],
-                           alternative=f'步骤：{args["body"][:300]}　允许的工具：{"、".join(args["allowed_tools"])}。技能不授权写操作；工具清单只对旧流程的 bot 生效。')
+                           alternative=f'步骤：{args["body"][:300]}　允许的工具：{"、".join(args["allowed_tools"])}。技能不授权写操作；工具清单只作说明，不限制它能用的工具。')
         elif name == "ingest_web_source":
             early = await _ingest(run, args, operation, display)
             if early is not None:

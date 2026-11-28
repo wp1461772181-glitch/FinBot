@@ -44,7 +44,6 @@ def _rag_scope():
 
 def _run(monkeypatch, *, owner, tool_scope=None):
     """One rag turn whose model answers at once; returns the turn and the first request's offered tools and messages."""
-    pass  # (removed import of the old turn)
     seen_tools, seen_messages = [], []
     monkeypatch.setattr(tools, "owner_credential_matches", lambda c: c == OWNER)
     turns = []

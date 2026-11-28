@@ -21,7 +21,6 @@ import pytest
 from app.agent_system_prompt import SELF_STATE_SENTENCE
 from app.agent_workflow import claim_public_wire as wire
 from app.agent_workflow import claim_shadow
-pass  # (removed import of the old turn)
 from app.agent_workflow import tools
 from app.agent_workflow.state import AgentRuntimeContext
 from test_agent_chat_stream import stream_fixture  # noqa: F401  (the endpoint fixture for the K11 label tests)

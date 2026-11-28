@@ -4,7 +4,6 @@ import json
 from datetime import UTC,datetime
 import pytest
 from app.agent_workflow.graph import deterministic_confidence_gate
-pass  # (removed import of the old turn)
 from app.agent_workflow.state import AgentRuntimeContext
 
 def test_gate_rejects_cross_company_and_period():

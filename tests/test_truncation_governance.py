@@ -9,7 +9,6 @@ from datetime import UTC, datetime
 from app import observability
 from app.agent_web_research import MAX_EXCERPT, _focus_source, extract_page
 from app.agent_workflow import evidence
-pass  # (removed import of the old turn)
 
 
 def _long_page():

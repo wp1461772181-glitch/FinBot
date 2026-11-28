@@ -985,3 +985,22 @@ def test_a_stopped_turn_that_executed_nothing_stays_cancelled(lab):
         await reading_a, await reading_b
     _scenario(scenario())
     assert lab.answers()[0][2]["status"] == "cancelled"
+
+
+def test_a_card_press_while_a_turn_of_the_conversation_works_gets_409(lab):
+    """A press is not a message: it never joins the running turn's inbox, and while the conversation's lock is held it is refused
+    (``conversation_busy``) rather than run beside the turn that is working (6b: the old turn's 409 tests went; this rule stays)."""
+    from fastapi import HTTPException
+    lock = asyncio.Lock()
+
+    async def scenario():
+        await lock.acquire()
+        stream.LOCKS[lab.cid] = lock
+        try:
+            with pytest.raises(HTTPException) as busy:
+                await lab.send("confirm:" + "t" * 40, pending_request_id=str(uuid.uuid4()))
+            assert busy.value.status_code == 409 and busy.value.detail == "conversation_busy"
+        finally:
+            lock.release()
+            stream.LOCKS.pop(lab.cid, None)
+    _scenario(scenario())

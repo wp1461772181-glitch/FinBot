@@ -68,7 +68,6 @@ async def _quiet(_event):
 
 def _turn(question, context, **kwargs):
     from app import agent_chat_store as store
-    pass  # (removed import of the old turn)
     async def run():
         try:
             return await direct.run_direct_turn(question, context, emit=_quiet, **kwargs)
@@ -132,3 +131,13 @@ def test_the_owners_words_ask_for_a_change_only_when_they_name_a_routine():
 
 # --- delete ----------------------------------------------------------------------------------------
 
+
+
+def test_proposals_api_is_owner_only(owner, client):
+    """6b (the old turn's test went with it): a routine card waiting in a bot's line is listed for the owner only."""
+    finbot = bots.create_bot(OWNER_HASH, {"name": "FinBot"})
+    operation = {"name": "create_routine", "arguments": {"name": "每小时新闻", "schedule_kind": "hourly", "instruction": "找一条新闻"}}
+    consent.propose(OWNER, finbot["conversation_id"], [operation], {"title": "新建例行任务 · 每小时新闻", "targets": []}, question="每小时帮我找一条新闻")
+    assert client.get("/agent-chat/tasks/proposals", headers={"X-Chat-Session": "s" * 40}).status_code == 403
+    listed = client.get("/agent-chat/tasks/proposals", headers={"X-Chat-Session": OWNER}).json()["proposals"]
+    assert [(p["title"], p["bot_id"], p["tools"]) for p in listed] == [("新建例行任务 · 每小时新闻", finbot["id"], ["create_routine"])]

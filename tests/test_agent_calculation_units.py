@@ -3,7 +3,6 @@ import asyncio,json
 import pytest
 from fastapi import HTTPException
 from app.agent_workflow.calculation import calculate
-pass  # (removed import of the old turn)
 from app.agent_workflow.state import AgentRuntimeContext
 
 SOURCE=[{'ordinal':1,'source_type':'calculation','quote':'{"value": "50115000000.00"}'}]

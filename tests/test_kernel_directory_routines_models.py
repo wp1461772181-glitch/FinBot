@@ -46,7 +46,6 @@ def owner(monkeypatch, disposable_database):
         db.query(AgentTask).delete()
         db.commit()
     import app.agent_chat_identity as identity
-    pass  # (removed import of the old turn)
     for module in (consent, tools, identity):
         monkeypatch.setattr(module, "owner_credential_matches", lambda c: c == OWNER)
     import app.kernel.act as kernel_act
@@ -173,6 +172,22 @@ def stub_catalog(monkeypatch, *names, keyless=()):
               "migrated_from": None, "context_window": None} for n in names]
     monkeypatch.setattr(catalog, "entries", lambda: (items, names[0] if names else None))
     monkeypatch.setattr(catalog, "_key_for", lambda entry: None if entry["name"] in keyless else "sk-secret-0123456789")
+
+
+def test_analyze_card_names_the_model_and_a_wrong_name_makes_no_card(monkeypatch):
+    stub_catalog(monkeypatch, "glm5.3-flash", "nokey", keyless=("nokey",))
+    from app.agent_workflow import write_text
+    monkeypatch.setattr(write_text, "source_display_title", lambda kind, source_id: "Apple 10-K")
+    out = run(act.prepare(make_run(), "analyze", {"symbol": "AAPL", "source_id": SOURCE, "catalog_model": "glm5.3-flash", "force": True}))
+    assert out.tier == 3 and "GLM5.3-FLASH" in out.display["alternative"] and "vendor/glm5.3-flash" in out.display["alternative"]
+    assert "重新" in out.display["alternative"] and "sk-secret" not in json.dumps(out.operation) + json.dumps(out.display)
+    assert out.operation["arguments"]["catalog_model"] == "glm5.3-flash" and out.operation["arguments"]["force"] is True
+    missing = run(act.prepare(make_run(), "analyze", {"symbol": "AAPL", "source_id": SOURCE, "catalog_model": "nope"}))
+    assert isinstance(missing, dict) and missing["error_code"] == "model_not_found"
+    nokey = run(act.prepare(make_run(), "analyze", {"symbol": "AAPL", "source_id": SOURCE, "catalog_model": "nokey"}))
+    assert nokey["error_code"] == "model_key_missing"
+    plain = run(act.prepare(make_run(), "analyze", {"symbol": "AAPL", "source_id": SOURCE}))
+    assert "默认" in plain.display["alternative"] and "重新" not in plain.display["alternative"]
 
 
 def test_analyze_runs_on_the_chosen_model_and_forces(monkeypatch):

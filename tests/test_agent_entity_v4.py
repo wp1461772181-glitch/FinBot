@@ -1,6 +1,5 @@
 import asyncio
 import pytest
-pass  # (removed import of the old turn)
 from app.agent_workflow.state import AgentRuntimeContext
 
 def test_shared_first_word_does_not_verify_a_different_issuer(monkeypatch):

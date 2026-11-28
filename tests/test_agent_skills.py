@@ -58,7 +58,6 @@ def _skill(name="读现金流", tools=("query_financials",), **fields):
 
 def _turn(*, bot_id=None, decider=None, recognizer=None, question="q", active_skill=None, unattended=False,
           executor=None):
-    pass  # (removed import of the old turn)
     from app.agent_workflow.state import AgentRuntimeContext
     settings = bots.turn_settings(OWNER_HASH, bot_id) if bot_id else {}
     context = AgentRuntimeContext("custom", "m", "k", owner_hash=OWNER_HASH, identity_credential=OWNER,

@@ -1,6 +1,5 @@
 """Behaviours the first production smoke of the fluent agent got wrong (2026-10-19, RAG on)."""
 import asyncio,json,time
-pass  # (removed import of the old turn)
 from app.agent_workflow.evidence import reviewed_answer,unsupported_number_values
 from app.agent_workflow.state import AgentRuntimeContext
 

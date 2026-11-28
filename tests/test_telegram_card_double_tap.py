@@ -19,7 +19,6 @@ from sqlalchemy import delete
 
 from app.agent_chat_store import owner_hash
 from app.database import SessionLocal
-pass  # (removed import of the old turn)
 from app.agent_workflow.models import AgentConsent, AgentWebSource
 from app.agent_workflow.state import AgentRuntimeContext
 from scripts import run_telegram_bridge as bridge

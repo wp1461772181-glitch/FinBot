@@ -15,7 +15,6 @@ import pytest
 
 from app.agent_tool_catalog import TOOL_CATEGORIES, Empty, ToolPolicy, definitions as real_definitions
 from app.agent_workflow import entities, tools
-pass  # (removed import of the old turn)
 from app.agent_workflow.state import AgentRuntimeContext
 
 OWNER = "o" * 40

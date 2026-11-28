@@ -12,7 +12,6 @@ from app import observability
 from app.agent_tool_catalog import CalculateArgs
 from app.agent_workflow import claim_numeric, evidence
 from app.agent_workflow.calculation import calculate
-pass  # (removed import of the old turn)
 from app.agent_workflow.evidence import (answer_scope, labelled_inference_lines, number_check, reviewed_answer,
                                          user_figure_values)
 from app.agent_workflow.state import AgentRuntimeContext

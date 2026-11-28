@@ -279,7 +279,6 @@ def _context(bot, **kwargs):
 
 def _turn(question, context, **kwargs):
     from app import agent_chat_store as store
-    pass  # (removed import of the old turn)
     async def run():
         try:
             return await direct.run_direct_turn(question, context, emit=_quiet, **kwargs)

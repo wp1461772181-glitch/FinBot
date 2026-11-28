@@ -7,7 +7,6 @@ import re
 
 import pytest
 
-pass  # (removed import of the old turn)
 from app.agent_workflow.evidence import citation_errors, strip_invalid_markers
 from app.agent_workflow.state import AgentRuntimeContext
 

@@ -1,7 +1,6 @@
 """C2/C7/C9 replace legacy text slot extraction with typed model-provided arguments."""
 import pytest
 from app.agent_tool_catalog import validate
-pass  # (removed import of the old turn)
 
 @pytest.mark.parametrize('args',[{'query':'news','days_back':0},{'query':'news','days_back':367},{'query':'news','max_results':0},{'query':'news','unknown':1}])
 def test_tool_arguments_are_schema_validated(args):

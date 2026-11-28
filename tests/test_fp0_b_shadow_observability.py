@@ -136,7 +136,6 @@ def test_reaching_the_target_writes_one_marker_and_judging_goes_on(shadow_env):
 # ---- WP0 step 11: the citation scores read legacy_review and say so ----------------------------
 
 from app import observability  # noqa: E402
-pass  # (removed import of the old turn)# noqa: E402
 from app.agent_workflow.state import AgentRuntimeContext  # noqa: E402
 
 

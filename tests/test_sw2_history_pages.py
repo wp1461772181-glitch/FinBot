@@ -8,11 +8,9 @@ from pathlib import Path
 import pytest
 
 from app.agent_tool_catalog import validate
-pass  # (removed import of the old turn)
 from app.agent_workflow.history_citations import (
     HISTORY_PAGE_NOTE, HISTORY_STORED_PARTIAL_NOTE, bind_history_citation, read_history_citation)
 from app.agent_workflow.state import AgentRuntimeContext
-pass  # (removed import of the old turn)
 
 TURN = "0c1f1a2b-3c4d-4e5f-8a9b-0c1d2e3f4a5b"
 # 11,248 characters; the figure sits at 8,991–8,996, beyond the 5,000-character display quote and on page 2.

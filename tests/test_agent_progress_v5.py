@@ -7,7 +7,6 @@ import pytest
 from fastapi import HTTPException
 
 from app import agent_chat_provider as provider
-pass  # (removed import of the old turn)
 from app.agent_workflow.state import AgentRuntimeContext
 
 

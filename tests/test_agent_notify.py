@@ -77,7 +77,6 @@ def _outbox():
 
 
 def _turn(bot_id, *, unattended=True, decider=None, executor=None, recognizer=None):
-    pass  # (removed import of the old turn)
     from app.agent_workflow.state import AgentRuntimeContext
     settings = bots.turn_settings(OWNER_HASH, bot_id)
     context = AgentRuntimeContext("custom", "m", "k", owner_hash=OWNER_HASH, identity_credential=OWNER,

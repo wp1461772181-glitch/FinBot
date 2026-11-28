@@ -2,7 +2,6 @@ import asyncio
 import json
 import pytest
 from app.agent_workflow import references, entities
-pass  # (removed import of the old turn)
 from app.agent_workflow.state import AgentRuntimeContext
 
 HISTORY=[{'role':'user','content':'列几个公司'}, {'role':'assistant','content':'1. 苹果（Apple，AAPL）\n2. 微软（Microsoft，MSFT）'}]

@@ -32,7 +32,6 @@ def owner(monkeypatch):
 
 
 def _turn(*, decider=None, recognizer=None, executor=None, tool_scope=None, question="q", state=None):
-    pass  # (removed import of the old turn)
     from app.agent_workflow.state import AgentRuntimeContext
     context = AgentRuntimeContext("custom", "m", "k", owner_hash=OWNER_HASH, identity_credential=OWNER,
                                   conversation_id=str(uuid.uuid4()), tool_scope=tool_scope,

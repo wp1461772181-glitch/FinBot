@@ -6,8 +6,6 @@ from fastapi import HTTPException
 
 from app.agent_chat_provider import ProviderFailure
 from app.agent_chat_stream import _FAILURE_NOTICES, _failure_notice
-pass  # (removed import of the old turn)
-pass  # (removed import of the old turn)
 from app.agent_workflow.state import AgentRuntimeContext
 
 GENERIC = "这一轮没有完成，没有生成回答。可以再发一次；如果连续出现，请稍后再试或换个问法。"

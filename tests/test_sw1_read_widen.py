@@ -8,7 +8,6 @@ from datetime import date
 
 import pytest
 
-pass  # (removed import of the old turn)
 from app.agent_workflow.filing_coverage import RECEIPT_LIMIT, coverage_receipt
 from app.agent_workflow.financials import xbrl_metrics_for
 from app.agent_workflow.state import AgentRuntimeContext

@@ -388,7 +388,6 @@ def test_document_ticker_with_dot_and_dash_is_a_plain_json_value_in_the_cache_ke
 # --------------------------------------------------------------------------------------------------------------------
 import asyncio
 
-pass  # (removed import of the old turn)
 from app.agent_workflow.state import AgentRuntimeContext
 
 

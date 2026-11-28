@@ -2,6 +2,7 @@
 operation, the words of a routine card, a revision card's notices, the facts of an executed write, and the two lists other modules
 read (the provider failures worth one more try, the prefixes of a card button's value).  Moved here unchanged."""
 import os
+import uuid
 
 from . import tools
 

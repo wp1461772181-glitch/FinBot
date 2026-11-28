@@ -83,7 +83,6 @@ def _context(settings, **kwargs):
 
 
 def _turn(question, context, **kwargs):
-    pass  # (removed import of the old turn)
     return asyncio.run(direct.run_direct_turn(question, context, emit=_quiet, **kwargs))
 
 

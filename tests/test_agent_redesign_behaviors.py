@@ -11,7 +11,6 @@ from app.database import Base,engine,SessionLocal
 from app.agent_chat_models import AgentResearchQueue
 from app.agent_workflow.models import AgentConsent,AgentWebSource
 from app.knowledge.models import KnowledgeDocument
-pass  # (removed import of the old turn)
 from app.agent_workflow.state import AgentRuntimeContext
 from app.agent_workflow import consent, tools
 from app.agent_tool_catalog import definitions,schemas

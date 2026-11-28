@@ -1,6 +1,5 @@
 """The resolver writes the canonical question every turn, and every later stage reads it."""
 import asyncio,json
-pass  # (removed import of the old turn)
 from app.agent_workflow.state import AgentRuntimeContext
 from app.freshness import requested_years
 

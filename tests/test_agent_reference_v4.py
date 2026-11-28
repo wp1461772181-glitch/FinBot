@@ -1,7 +1,6 @@
 """Behavior at the native-model boundary, not claims about model accuracy."""
 import asyncio,json
 import pytest
-pass  # (removed import of the old turn)
 from app.agent_workflow.state import AgentRuntimeContext
 
 LIST='1. 远期（Forward）\n2. 期货（Futures）\n3. 期权（Option）\n4. 互换（Swap）'

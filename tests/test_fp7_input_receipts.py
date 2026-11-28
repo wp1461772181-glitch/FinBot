@@ -5,7 +5,6 @@ import json
 
 import pytest
 
-pass  # (removed import of the old turn)
 from app.agent_workflow.calculation import CalculationUnbound, calculate
 from app.agent_workflow.state import AgentRuntimeContext
 

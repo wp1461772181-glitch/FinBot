@@ -9,7 +9,6 @@ from app import agent_profile as profile
 from app.agent_chat_models import AgentBot, AgentConversation, AgentMessage, AgentProfileItem
 from app.agent_chat_store import owner_hash
 from app.agent_workflow import consent
-pass  # (removed import of the old turn)
 from app.agent_workflow.models import AgentConsent
 from app.database import Base, SessionLocal, engine
 
@@ -50,7 +49,6 @@ async def _quiet(_event):
 
 
 def _turn(question, context, **kwargs):
-    pass  # (removed import of the old turn)
     return asyncio.run(direct.run_direct_turn(question, context, emit=_quiet, **kwargs))
 
 

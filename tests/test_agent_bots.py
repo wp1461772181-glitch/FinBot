@@ -76,7 +76,6 @@ async def _quiet(_event):
 
 def _turn(question, settings, *, recognizer, decider, executor=None, reasoning_effort=None):
     """One real Turn of a bot with injected model callbacks."""
-    pass  # (removed import of the old turn)
     from app.agent_workflow.state import AgentRuntimeContext
     context = AgentRuntimeContext("custom", "test", "dummy", identity_credential=OWNER, owner_hash=OWNER_HASH,
                                   conversation_id=settings["conversation_id"], intent_recognizer=recognizer,
