@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -31,6 +32,14 @@ LAST_HOUR = 12
 WINDOW_DEFAULT = timedelta(hours=24)
 SOURCE = "brief"
 HEAD = "【早间简报】"
+# The model's own title line at the top of what it wrote (「早间简报」, 「**早间简报（2026-11-26）**」, 「# 早间简报」…): the code writes HEAD.
+_OWN_TITLE = re.compile(r"\A\s*(?:#+\s*)?[*_【\[]*\s*早间简报\s*[】\]*_:：]*\s*"
+                        r"(?:[（(]?\s*\d{4}[-/年.]\d{1,2}[-/月.]\d{1,2}日?\s*[)）]?)?\s*[】\]*_:：]*\s*(?:\n+|\Z)")
+
+
+def without_own_title(text: str) -> str:
+    """The body without a first line that is only the brief's title (the prompt asks for none; 11-28 the first live brief had one)."""
+    return _OWN_TITLE.sub("", text, count=1)
 TEXT_MAX = 300        # alert text per kept item
 WALL_SECONDS = 240    # longer than loop.SOFT_SECONDS, so the loop's own wrap-up comes first
 COUNT_KEYS = ("digest", "held", "record", "ignore", "told", "failed")
@@ -226,7 +235,7 @@ async def _write(owner: str, day: str, kept: list[dict], held: list[dict], facts
     if result is not None and (result.get("reason") == "empty_answer" or not answer):
         failure, answer = "模型没有写出简报正文", ""
     reason = f"{failure}，改发原样列表。" if failure else None
-    body = answer if not failure else fallback_text(kept, held)
+    body = without_own_title(answer) if not failure else fallback_text(kept, held)
     audit = (result or {}).get("audit") or {}
     if holder.get("conversation"):
         from ..agent_recall import TASK_POST_HEAD       # keeps the brief out of the past-conversation index, as wake turns are

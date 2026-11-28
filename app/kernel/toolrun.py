@@ -216,13 +216,14 @@ def _calculate(run, name: str, args: dict) -> dict:
 
 
 def _valid_arguments(name: str, args: dict) -> dict | None:
-    """Only the in-process calculations are validated here; ``tools.invoke`` validates the others itself."""
+    """Only the in-process calculations are validated here; ``tools.invoke`` validates the others itself.  A failure is returned (the
+    validation error, for ``tools.argument_error``), not raised."""
     if name not in _CALCULATIONS:
         return args
     try:
         return validate(name, args)
-    except ValueError:
-        return None
+    except ValueError as exc:
+        return exc
 
 
 def _parse_arguments(function: dict) -> dict | None:
@@ -438,10 +439,11 @@ async def run_step_tools(run, calls: list[dict]) -> list[dict]:
         elif item.name not in run.tool_names or item.name not in definitions():
             item.result = tools.error("tool_not_in_bot_scope")
         elif item.name in _CALCULATIONS:
-            item.args = _valid_arguments(item.name, item.args)
-            if item.args is None:
-                item.result = tools.error("invalid_arguments")
+            checked = _valid_arguments(item.name, item.args)
+            if isinstance(checked, Exception):
+                item.result = tools.argument_error(item.name, checked)
                 continue
+            item.args = checked
             serial.append(item)
         else:
             reads.append(item)

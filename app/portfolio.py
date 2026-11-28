@@ -377,12 +377,17 @@ WARNING_TEXT = {"available_funds_negative": "提示：这笔记录之后可用�
                 "price_missing": "有持仓没有取到最新价，总资产与仓位占比不完整。"}
 
 
+CURRENCY = "USD"
+CURRENCY_NOTE = "金额单位：美元（这个账本只记美股）"
+
+
 def evidence_rows(summary: dict) -> list[dict]:
     """The rows ``query_portfolio`` returns: one account row and one per position, each carrying every figure it
     states as plain numbers in ``excerpt`` (that text is the citation quote an answer's numbers are checked against)."""
     rows = []
     as_of = summary.get("price_date")
-    account = [f"可用资金 {summary['available_funds']}", f"持仓市值 {summary['positions_value']}"]
+    # The ledger holds US stocks only and keeps every amount in US dollars: said in the text the model reads (11-28 brief: 「元」).
+    account = [CURRENCY_NOTE, f"可用资金 {summary['available_funds']}", f"持仓市值 {summary['positions_value']}"]
     if summary["total_assets"] is not None:
         account.append(f"总资产 {summary['total_assets']}")
     account.append(_signed("浮动盈亏合计", Decimal(summary["floating_pnl"])))
@@ -390,11 +395,11 @@ def evidence_rows(summary: dict) -> list[dict]:
     account.append(_signed("已实现盈亏", Decimal(summary["realized_pnl"])))
     if as_of:
         account.append(f"行情数据日期 {as_of}")
-    rows.append({"id": "portfolio:account", "source_type": "portfolio", "title": "持仓账户汇总", "symbol": None,
+    rows.append({"id": "portfolio:account", "source_type": "portfolio", "title": "持仓账户汇总", "symbol": None, "currency": CURRENCY,
                  "excerpt": "；".join(account) + "。", "price_date": as_of, "available_funds": summary["available_funds"],
                  "total_assets": summary["total_assets"], "warnings": summary["warnings"]})
     for view in summary["positions"]:
-        parts = [f"{view['symbol']} 持仓 {view['shares']} 股", f"平均成本 {view['avg_cost']}", f"摊薄成本 {view['diluted_cost']}",
+        parts = [f"{view['symbol']} 持仓 {view['shares']} 股（金额单位：美元）", f"平均成本 {view['avg_cost']}", f"摊薄成本 {view['diluted_cost']}",
                  f"持仓成本 {view['cost']}"]
         if view["price"] is not None:
             parts += [f"最新价 {view['price']}（数据日期 {view['price_date']}）", f"市值 {view['market_value']}",
@@ -415,7 +420,7 @@ def evidence_rows(summary: dict) -> list[dict]:
         if plan.get("plan_text"):
             parts.append("计划：" + plan["plan_text"])
         rows.append({"id": f"portfolio:{view['symbol']}", "source_type": "portfolio", "title": f"{view['symbol']} 持仓",
-                     "symbol": view["symbol"], "excerpt": "；".join(parts) + "。", "price_date": view["price_date"],
+                     "symbol": view["symbol"], "currency": CURRENCY, "excerpt": "；".join(parts) + "。", "price_date": view["price_date"],
                      **{k: view[k] for k in ("shares", "avg_cost", "diluted_cost", "price", "market_value", "floating_pnl",
                                              "today_pnl", "weight_pct") if view[k] is not None}})
     return rows

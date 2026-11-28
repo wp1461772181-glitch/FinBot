@@ -368,14 +368,14 @@ class RecordTradeArgs(Args):
     kind:Literal['opening','buy','sell','dividend','split']=Field(description='buy/sell: a trade; opening: a position the user already holds (moves no cash); dividend: cash received; split: a stock split (ratio 2 for 1 into 2).')
     symbol:str=Field(pattern=r'^[A-Za-z]{1,5}(?:[.-][A-Za-z]{1,2})?$')
     quantity:float|int|str|None=Field(default=None,description='Shares, for opening/buy/sell.')
-    price:float|int|str|None=Field(default=None,description='Price per share, for opening/buy/sell. For opening, the average cost the user states.')
+    price:float|int|str|None=Field(default=None,description='Price per share in US dollars (the ledger is US stocks in USD only), for opening/buy/sell. For opening, the average cost the user states.')
     fee:float|int|str|None=Field(default=None,description='Commission and fees of this trade; omit for 0.')
-    amount:float|int|str|None=Field(default=None,description='Total cash received, for dividend.')
+    amount:float|int|str|None=Field(default=None,description='Total cash received in US dollars, for dividend.')
     ratio:float|int|str|None=Field(default=None,description='For split: new shares per old share (1 into 2 is 2).')
     occurred_on:str|None=Field(default=None,pattern=r'^\d{4}-\d{2}-\d{2}$',description='Trade date; omit for today.')
     note:str|None=Field(default=None,max_length=200)
 class SetAvailableFundsArgs(Args):
-    amount:float|int|str=Field(description='The available funds (可用资金: money the user can add to positions) the user says they have now; the server writes the difference.')
+    amount:float|int|str=Field(description='The available funds (可用资金: money the user can add to positions) the user says they have now, in US dollars (the ledger is USD only: an amount in another currency is converted only with the user\'s rate, or asked about); the server writes the difference.')
 class SetPositionPlanArgs(Args):
     symbol:str=Field(pattern=r'^[A-Za-z]{1,5}(?:[.-][A-Za-z]{1,2})?$')
     plan_text:str|None=Field(default=None,max_length=2000,description="The user's own plan for this holding, in their words; an empty string clears it.")
