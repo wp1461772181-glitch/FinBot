@@ -80,12 +80,13 @@ def test_escalate_is_always_last_in_the_tool_list_and_never_invoked_through_tool
 
 def test_ceiling_and_clamp_tables(monkeypatch):
     monkeypatch.delenv("FINBOT_KERNEL_TOP_TIER", raising=False)
-    assert tiers.ceiling() == "high"
-    for value, top in (("low", "low"), ("MID", "mid"), ("high", "high"), ("max", "high"), ("", "high")):
+    assert tiers.ceiling() == "max"                 # deep research is reachable unless the server caps it
+    for value, top in (("low", "low"), ("MID", "mid"), ("high", "high"), ("max", "max"), ("", "max"), ("ultra", "max")):
         monkeypatch.setenv("FINBOT_KERNEL_TOP_TIER", value)
         assert tiers.ceiling() == top
     assert tiers.clamp("high", "mid") == "mid"
     assert tiers.clamp("mid", "high") == "mid"
+    assert tiers.clamp("max", "high") == "high"
 
 
 def test_no_escalation_reports_low(env):
