@@ -82,7 +82,7 @@ def gather(owner_hash: str, since: datetime) -> dict:
     night_digest_sent = False
     for row in duty_log.since(owner_hash, since):
         event = row["event"] or {}
-        if event.get("deferred"):
+        if event.get("deferred") and event.get("kind") != "missed":     # a missed alert sent again is held for this brief, not by the sentinel
             night_digest_sent = True
         if row["outcome"] != "decided":
             counts["failed"] += 1
@@ -104,6 +104,22 @@ def gather(owner_hash: str, since: datetime) -> dict:
     return {"kept": kept, "held": held, "counts": counts, "night_digest_sent": night_digest_sent, "findings": findings, "problems": problems, "selfcheck_ids": selfcheck_ids}
 
 
+def _resent_told(owner_hash: str, rows: list[dict]) -> set[tuple[int, int]]:
+    """(check id, finding index) of the findings the duty turn sent again and chose to tell (``selfcheck.resend``): the brief does not
+    list them a second time.  A finding it recorded or ignored stays a line: that is the record of a miss."""
+    from .selfcheck import RESEND_BASE
+    told = set()
+    try:
+        for row in rows:
+            for index, _ in enumerate(row.get("findings") or []):
+                judged = duty_log.get(owner_hash, RESEND_BASE + int(row["id"]) * 100 + index)
+                if judged and judged.get("decision") == "tell_now":
+                    told.add((row["id"], index))
+    except Exception:
+        logger.exception("morning brief: the missed alerts sent again could not be read")
+    return told
+
+
 def missed_findings(owner_hash: str) -> tuple[list[dict], list[tuple[str, bool]], list[int]]:
     """What the missed-alert checks no brief has carried yet (``kernel.selfcheck``) found, each ``(kind, symbol, at)`` once; what they could
     not check (a check that failed, was cut off, or could not fetch some symbols); and those checks' row ids.  Not windowed: a check that
@@ -114,6 +130,7 @@ def missed_findings(owner_hash: str) -> tuple[list[dict], list[tuple[str, bool]]
         logger.exception("morning brief: the missed-alert checks could not be read")
         return [], [], []
     out, problems, seen, unfetched = [], [], set(), None
+    told = _resent_told(owner_hash, rows)
     for row in rows:
         day, session = row.get("day") or "", row.get("session")
         if row.get("outcome") != "done":
@@ -130,9 +147,9 @@ def missed_findings(owner_hash: str) -> tuple[list[dict], list[tuple[str, bool]]
         elif errors.get("unfetched"):
             # a symbol Yahoo never serves would repeat every day: it rides along in a brief, it never starts one
             unfetched = (f"{when} 的价格自查有几只没取到行情：{errors['unfetched']}，这几只没有核对。", False)
-        for finding in row.get("findings") or []:
-            if not isinstance(finding, dict):
-                continue
+        for index, finding in enumerate(row.get("findings") or []):
+            if not isinstance(finding, dict) or (row["id"], index) in told:
+                continue          # the duty turn has told him this one itself (11-28: sent again, with why it was late)
             key = (finding.get("kind"), finding.get("symbol"), finding.get("at"))
             if key not in seen:
                 seen.add(key)
