@@ -131,4 +131,4 @@ def test_open_page_is_offered_and_opens_a_settings_page_with_its_link(env):
     [action] = [e for e in events if e.get("event") == "client_action"]
     assert action["action"] == "open_page" and action["page"] == "settings_models"
     sent = tool_message(fake, 1)
-    assert sent["data"][0]["link"] == "http://finbotai.me/#/settings/models"
+    assert sent["data"][0]["link"] == "https://finbotai.me/#/settings/models"

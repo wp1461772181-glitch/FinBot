@@ -10,7 +10,7 @@ from ..agent_tool_catalog import definitions,validate
 from ..knowledge.runtime import research_context
 from .models import AgentWebSource
 from .fp_flags import flag
-WEB_URL_DEFAULT='http://finbotai.me'      # the deployed web page (GitHub Pages); FINBOT_WEB_URL overrides it
+WEB_URL_DEFAULT='https://finbotai.me'     # the deployed web page (GitHub Pages); FINBOT_WEB_URL overrides it, https only (an open_page link may lead to where a key is entered)
 
 logger=logging.getLogger(__name__)
 
@@ -314,7 +314,8 @@ async def _dispatch(name,args,context,is_owner,emit,page_chars=None):
         if name=='open_page':
             # The web opens it from the event; a bridge has no page to open, so the link goes back to the model to hand on.
             from ..agent_tool_catalog import PAGE_PATHS
-            base=os.getenv('FINBOT_WEB_URL','').strip() or WEB_URL_DEFAULT
+            base=os.getenv('FINBOT_WEB_URL','').strip()
+            if not base.startswith('https://'):base=WEB_URL_DEFAULT
             return result([{'client_action':action,'page':args['page'],'link':f"{base.rstrip('/')}/#{PAGE_PATHS[args['page']]}"}],'browser')
         return result([{'client_action':action}],'browser')
     if name=='review_filing':
