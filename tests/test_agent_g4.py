@@ -10,7 +10,7 @@ import pytest
 
 @pytest.mark.parametrize("code, fragment", [
     ("provider_timeout", "超时"), ("provider_rate_or_quota_error", "额度"), ("provider_invalid_key", "API key"),
-    ("provider_network_error", "连接"), ("anything_else", "没有完成"),
+    ("provider_network_error", "连不上"), ("anything_else", "没能答完"),      # 11-28: the failure lines are in its own voice
 ])
 def test_a_failure_is_told_in_words_without_an_internal_code(code, fragment):
     from fastapi import HTTPException

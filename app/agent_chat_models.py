@@ -23,6 +23,9 @@ class AgentConversation(Base):
     # The bot whose line this is (agent_bots).  NULL: a guest's conversation, or an owner's from before bots;
     # the owner's are moved under the default bot when it is created.
     bot_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True, index=True)
+    # Where the conversation came from when it was not him: "ruler" (the evaluation harness).  The monthly memory review and the message
+    # counts leave such conversations out: test questions are not his habits (11-28: 「你偏好用表格」 was learned from repeated test runs).
+    origin: Mapped[str | None] = mapped_column(String(16), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 

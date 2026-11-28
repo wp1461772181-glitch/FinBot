@@ -39,7 +39,7 @@ def owner_credential() -> str:
 def ask(base: str, credential: str, text: str, *, catalog_model: str = "",
         conversation_id: str | None = None, timeout: float = 1300, clock=time.monotonic) -> TurnOutcome:
     """Send one question and time the streamed answer. Failures come back as a status, never as an exception."""
-    body = {"message": text, "catalog_model": catalog_model}
+    body = {"message": text, "catalog_model": catalog_model, "via": "ruler"}      # its conversations are marked: not his words for the memory review
     if conversation_id:
         body["conversation_id"] = conversation_id
     start = clock()

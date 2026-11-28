@@ -315,6 +315,8 @@ class StreamRequest(BaseModel):
  catalog_model:str|None=Field(default=None,max_length=40)
  # FP13: asks for the turn to keep running if this connection drops; the server flag decides whether that is honoured.
  detach:bool=False
+ # Where the message came from (the Telegram and WeChat bridges send theirs; the web page sends none): the model is told, a chat shows plain text.
+ via:Literal["web","telegram","wechat","ruler"]|None=None
  @field_validator("base_url")
  @classmethod
  def valid_endpoint(cls,value):
@@ -379,11 +381,11 @@ def _bounded_by_fields(value, limit, data):
  if _protocol_size(result)>limit: return {"ok":False,"data":None,"error_code":"tool_result_truncated","source":None,"as_of":None}
  return result
 _FAILURE_NOTICES={
- "provider_timeout":"模型服务这次响应超时，本轮没有完成。请再发一次。",
+ "provider_timeout":"抱歉，模型服务这次响应超时了，我没能答完。你再发一次试试。",
  "provider_rate_or_quota_error":"模型服务额度不足或请求被限流，本轮没有完成。请稍后再试。",
  "provider_invalid_key":"模型服务拒绝了这次请求：API key 无效。请到设置里检查后重试。",
  "provider_model_access_denied":"模型服务拒绝了这次请求：模型不可用或当前 key 无权访问。请到设置里检查后重试。",
- "provider_network_error":"连接模型服务失败，本轮没有完成。请稍后再试。",
+ "provider_network_error":"抱歉，我这边连不上模型服务，这次没能答完。等一会儿再发一次试试。",
  "provider_refusal":"模型拒绝回答了这个问题（Anthropic 的安全分类器拦下了这次请求）。可以换个说法再问，或换一个模型。",
  "provider_sdk_missing":"服务器上没有安装 Anthropic 的 Python 包（anthropic）：请先安装，或把 FINBOT_ANTHROPIC_NATIVE 设为 off 暂时回到兼容接口。",
  "provider_workspace_required":"这个 Anthropic key 没有绑定到某个工作区：请在后端设置 FINBOT_ANTHROPIC_WORKSPACE_ID（工作区 ID，wrkspc_ 开头），或换一个绑定了工作区的 key。",
@@ -391,7 +393,7 @@ _FAILURE_NOTICES={
  "pending_request_expired":"这张卡片已经过期，没有执行任何操作。请把你的选择直接打字发给我，或重新提出请求。",
  "pending_request_mismatch":"这张卡片已经不是当前待处理的那一张，没有执行任何操作。请按最新的卡片操作，或重新提出请求。",
  "task_token_cap":"这次任务的用量达到了为它设定的上限，已停止。原样重跑结果相同；可以缩小任务范围后再试。",
- "workflow_incomplete":"这一轮在生成过程中意外中断，没有生成回答。可以再发一次。",
+ "workflow_incomplete":"抱歉，我写到一半意外中断了，没能答完。你再发一次试试。",
  "provider_protocol_invalid":"模型服务这次返回的内容无法使用，本轮没有完成。可以再发一次；连续出现时请稍后再试。",
  "tool_call_batch_too_large":"这一轮没有完成：模型一步发出的工具调用超过了系统单次能接收的上限。原样再发通常结果相同；可以把问题拆成几部分再问。",
  "classification_invalid":"这一轮在理解你的问题时内部处理出错，没有生成回答。可以再发一次；如果连续出现，请换个问法。",
@@ -412,7 +414,9 @@ def _failure_notice(exc:Exception)->str:
   status=getattr(exc,"provider_status",None)
   shown=f"（上游返回 HTTP {status}）" if type(status) is int and 100<=status<=599 else ""
   return _FAILURE_NOTICES_MORE[code].format(status=shown)
- return _FAILURE_NOTICES.get(code,"这一轮没有完成，没有生成回答。可以再发一次；如果连续出现，请稍后再试或换个问法。")
+ return _FAILURE_NOTICES.get(code,GENERIC_FAILURE)
+# 11-28 (docs/finbot-humanlike-plan-2026-11-28, E): the catch-all, in its own voice.
+GENERIC_FAILURE="抱歉，这次我没能答完。你再发一次试试；要是连着几次都这样，等一会儿再问，或者换个说法。"
 def _is_owner(credential:str|None)->bool:
  from .agent_chat_identity import owner_credential_matches
  return owner_credential_matches(credential)
@@ -569,7 +573,7 @@ async def stream_chat(payload:StreamRequest,request:Request,x_chat_session:str|N
  cid=payload.conversation_id
  if cid:
   if not await verify_conversation(cid,x_chat_session):raise HTTPException(404,"conversation_not_found")
- else:cid=await create_conversation(x_chat_session)
+ else:cid=await create_conversation(x_chat_session,**({"origin":"ruler"} if payload.via=="ruler" else {}))      # only the ruler's are marked
  if not payload.pending_request_id:
   # 3c: the owner speaks while a turn of this conversation is working: it is handed to that turn (no 409).  A card press is not a message.
   running=inboxes.target(cid)
@@ -754,7 +758,7 @@ async def _start_turn(payload,x_chat_session,bot,chosen,model_label,cid,*,separa
         api_key=chosen.key(),base_url=chosen.base_url,owner_hash=owner_hash(x_chat_session),
         conversation_id=cid,identity_credential=x_chat_session,turn_id=turn,pending_request_id=payload.pending_request_id,
         legacy_result_sets=legacy_result_sets,legacy_source_choices=legacy_source_choices,
-        history_citation_catalogue=context.get("catalogue", []),profile_block=profile_block,bot=bot,context_window=chosen.window,self_state=self_state,catalog_name=chosen.name,**({"inbox":box} if box is not None else {})):
+        history_citation_catalogue=context.get("catalogue", []),profile_block=profile_block,bot=bot,context_window=chosen.window,self_state=self_state,catalog_name=chosen.name,via=payload.via,**({"inbox":box} if box is not None else {})):
        await queue.put(("event",event))
     except asyncio.CancelledError:
      raise

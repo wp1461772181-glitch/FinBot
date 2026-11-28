@@ -2,8 +2,13 @@
 
 /** The two tabs live in the address: ?tab=recall is 往事, anything else (or nothing) is 画像. */
 export const memoryTab = (value) => (value === "recall" ? "recall" : "profile");
-export const KIND_LABELS = { preference: "偏好", about_me: "关于我", instruction: "长期指令" };
-export const KINDS = ["preference", "about_me", "instruction"];
+export const KIND_LABELS = { preference: "偏好", about_me: "关于我", instruction: "长期指令", style: "相处方式", recent: "近况" };
+export const KINDS = ["preference", "about_me", "instruction", "style", "recent"];
+/** 11-28 (活人感): what it knows of him as a person, shown apart above the layers: how to talk with him, what is on his mind lately. */
+export const PORTRAIT_KINDS = ["style", "recent"];
+export const isPortrait = (item) => PORTRAIT_KINDS.includes(item.kind) && item.status === "active";
+/** A 近况 needs no 确认: it is used at once and fades by itself after 30 days unseen. */
+export const canConfirm = (item) => item.origin === "inferred" && item.kind !== "recent";
 export const MAX_TEXT = 200;
 /** Only what the model inferred has 确认 (what the owner said or typed is already theirs). */
 export const isInferred = (item) => item.origin === "inferred";

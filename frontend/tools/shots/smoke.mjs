@@ -5568,7 +5568,7 @@ async function botSettingsKeyboard(ctx) {
     let hops = 0;
     for (; hops < 120; hops += 1) { await page.keyboard.press("Tab"); if ((await focused()).id === "bot-name") break; }
     assert(hops < 120, "the name field can not be reached with Tab");
-    await page.keyboard.press("Control+a");
+    await page.keyboard.press("ControlOrMeta+a");
     await page.keyboard.type("键盘改的名");
     await saveBar(page).waitFor({ timeout: 5000 });
     let steps = 0;
@@ -8454,7 +8454,7 @@ async function portfolioKeyboard(ctx) {
     assert((await active()).expanded === "true" && (await active()).id === "pf-toggle", "Enter did not open the row (focus stays on its button)");
     await tabTo((a) => a.id === "pf-plan-text", "the plan text");
     await page.keyboard.press("End"); await page.keyboard.type(" 键盘加的一句");
-    await tabTo((a) => a.id === "pf-add_price", "the 补仓价"); await page.keyboard.press("Control+a"); await page.keyboard.type("199.5");
+    await tabTo((a) => a.id === "pf-add_price", "the 补仓价"); await page.keyboard.press("ControlOrMeta+a"); await page.keyboard.type("199.5");
     const save = await tabTo((a) => a.id === "pf-plan-save", "保存计划 (it is on after the change)");
     assert(save.id === "pf-plan-save", "not on the save key");
     await page.keyboard.press("Enter");
@@ -9231,7 +9231,7 @@ async function routinesKeyboard(ctx) {
     assert((await page.locator('[data-slot="drawer-overlay"]').count()) === 1, "the drawer has no overlay");
     // from the name, only the keyboard: type, go to 内容, save
     await page.locator("[data-step-button=basics]").focus(); await page.keyboard.press("Enter");
-    await page.locator("#task-name").focus(); await page.keyboard.press("Control+a"); await page.keyboard.type("键盘改的名字");
+    await page.locator("#task-name").focus(); await page.keyboard.press("ControlOrMeta+a"); await page.keyboard.type("键盘改的名字");
     await page.locator("[data-step-button=content]").focus(); await page.keyboard.press("Enter");
     await page.locator("[data-testid=task-section-content]").waitFor({ timeout: 5000 });
     await page.locator("[data-testid=task-submit]").focus(); await page.keyboard.press("Enter");
@@ -10117,6 +10117,48 @@ async function permissionModes(ctx) {
     assert((await guest.page.locator("[data-testid=account-permission]").count()) === 0, "a guest sees the permission card");
   } finally { await guest.close(); }
   return "three modes, 默认 chosen with its line; 完全放行 sends one PUT {mode:full} and its line replaces the default one; choosing it again sends nothing; three always-lines; guest has no card; no sideways overflow at 390";
+}
+
+/** 活人感 (11-28): an active 相处方式 and 近况 sit apart in 「它对你的了解」, above the layers and not in them; a 近况 has no 确认, a style guess the
+ * owner confirmed keeps its edit and delete; nothing is sent by opening the page. */
+async function memoryPortrait(ctx) {
+  const state = buildState();
+  const base = state.assistant.profile[0];
+  state.assistant.profile.push({ ...base, id: "pf000000-0000-4000-8000-000000000091", handle: "P91", kind: "recent", text: "在找还没被广泛关注的潜力股", origin: "inferred", quote: "暂时未获得太多关注的潜力股" },
+                               { ...base, id: "pf000000-0000-4000-8000-000000000092", handle: "P92", kind: "style", text: "喜欢大白话，少用术语", origin: "pattern", quote: "听着好复杂" });
+  const view = await asOpen(ctx, "memory portrait", "#/assistant/memory", "[data-testid=memory-portrait]", { state, width: 390 });
+  try {
+    const { page } = view;
+    const portrait = page.locator("[data-testid=memory-portrait]");
+    assert((await portrait.locator("[data-testid=memory-item]").count()) === 2, "the portrait does not hold the two items");
+    assert((await page.locator("[data-testid=memory-layer] [data-testid=memory-item]", { hasText: "潜力股" }).count()) === 0, "the 近况 is also in a layer");
+    const recent = portrait.locator("[data-testid=memory-item]", { hasText: "潜力股" });
+    assert((await recent.locator("[data-testid=memory-kind]").innerText()).trim() === "近况", "the 近况 label is missing");
+    assert((await recent.locator("[data-testid=memory-confirm]").count()) === 0, "a 近况 offers 确认");
+    assert((await portrait.locator("[data-testid=memory-item]", { hasText: "大白话" }).locator("[data-testid=memory-kind]").innerText()).trim() === "相处方式", "the 相处方式 label is missing");
+    const wide = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    assert(wide <= 0, `sideways overflow of ${wide}px at 390`);
+    assert(view.mock.state.assistant.writes.length === 0, "opening the page wrote something");
+  } finally { await view.close(); }
+  return "相处方式 and 近况 sit apart in 「它对你的了解」 and not in a layer; labels; no 确认 on a 近况; no sideways overflow at 390; no write";
+}
+
+/** 它记着要回头看的事 (活人感 11-28): listed with its time, 取消 sends one DELETE and the row goes; with none the section is not there. */
+async function memoryFollowUps(ctx) {
+  const state = buildState();
+  state.followUps.items = [{ id: 7, what: "看 ARDT 财报后的股价反应", symbol: "ARDT", status: "open", due_at: "2026-11-30T01:00:00+00:00", due_label: "11-30 09:00", created_at: "2026-11-28T15:00:00+00:00" }];
+  const view = await asOpen(ctx, "memory follow-ups", "#/assistant/memory", "[data-testid=memory-follow-up]", { state, width: 390 });
+  try {
+    const { page } = view;
+    const row = page.locator("[data-testid=memory-follow-up]");
+    assert((await row.innerText()).includes("看 ARDT 财报后的股价反应") && (await row.locator("[data-testid=memory-follow-up-due]").innerText()).trim() === "11-30 09:00", "the row is not right");
+    await row.locator("[data-testid=memory-follow-up-cancel]").click();
+    await page.waitForFunction(() => !document.querySelector("[data-testid=memory-follow-ups]"), null, { timeout: 8000 });
+    assert(view.mock.state.followUps.writes.length === 1 && view.mock.state.followUps.writes[0].path === "/follow-ups/7", "取消 did not send one DELETE");
+    const wide = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    assert(wide <= 0, `sideways overflow of ${wide}px at 390`);
+  } finally { await view.close(); }
+  return "the follow-up is listed with its time; 取消 sends one DELETE and the section goes; no sideways overflow at 390";
 }
 
 async function memoryNotesOnce(ctx) {
@@ -12123,6 +12165,8 @@ const CHECKS = [
   ["skills-keyboard: a skill made and saved with the keyboard alone, the card's 「…」 menu with Esc returning the focus, the editor closed with Esc and the focus back on 编辑", skillsKeyboard],
   ["memory-ops: the nine memory operations (add ×3, edit with Enter / Esc, scope, 确认 only on inferred, delete by hold, the 往事 tab in the address, search only on submit, the bot filter, open a conversation) send the old requests; a refresh keeps the tab", memoryOps],
   ["owner-views: the company page's 你的看法 card (current view, his words, date, folded history, delete with a confirm) and the memory page's section", ownerViews],
+  ["memory-follow-ups: what it keeps to look at again, listed with its time, 取消 sends one DELETE", memoryFollowUps],
+  ["memory-portrait: 相处方式 and 近况 shown apart in 「它对你的了解」, a 近况 without 确认", memoryPortrait],
   ["permission-modes: the account page's 权限 card: three modes, the chosen one's line, one PUT per change, none for the same choice, no card for a guest", permissionModes],
   ["watch-rules: the memory page's rules block: his rules, the system defaults (a hard guarantee has no switch), the switch, the threshold edit, restore, the sensitivity, the 5-minute switch and delete each send the contract's write", watchRules],
   ["memory-notes-once: each tab's one sentence appears exactly once, word for word as the old page, and not on the other tab; inferred items carry 推断 and 确认, the others neither", memoryNotesOnce],

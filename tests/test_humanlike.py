@@ -1,0 +1,291 @@
+"""「活人感」 (docs/finbot-humanlike-plan-2026-11-28): who it is and how it reads what he says, the 「此刻」 line (Beijing time and the channel),
+the bridges saying where a message came from, the profile block's header, and the fixed failure lines in its own voice."""
+import asyncio
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+import pytest
+
+from app import agent_profile as profile
+from app.agent_chat_stream import GENERIC_FAILURE, StreamRequest
+from app.kernel import prompt
+from tests.test_kernel_loop import env, fake_consent, run, script, step  # noqa: F401  (fixtures)
+
+AT = datetime(2026, 11, 29, 0, 41, tzinfo=ZoneInfo("Asia/Shanghai"))
+
+
+def test_the_system_text_says_who_it_is_and_to_read_a_remark_as_a_remark():
+    text = prompt.system_text()
+    assert text.startswith("你是 FinBot，他的私人助手，最懂的是金融。")
+    for phrase in ("一句感想、一点担心，还是随口聊聊", "是感想就像朋友那样接话", "上文看得出指什么就直接接着说，真看不出来再问",
+                   "他是新手就少用术语、多打比方", "不扫兴，也不奉承", "数字照旧只说查到的", "不必每次在结尾问要不要接着做"):
+        assert phrase in text, phrase
+    assert "结论先说，不绕" not in text          # the one line it used to be
+
+
+@pytest.mark.parametrize("via,where,shown", [("wechat", "微信", "纯文字"), ("telegram", "Telegram", "纯文字"), ("web", "网页", "Markdown"),
+                                             (None, "网页", "Markdown"), ("carrier pigeon", "网页", "Markdown")])
+def test_the_scene_line_says_the_time_and_what_the_channel_shows(via, where, shown):
+    line = prompt.scene_line(via, AT)
+    assert line.startswith("系统说明（此刻）：北京时间 2026-11-29（周日）00:41。") and f"他是在{where}上发来的" in line and shown in line
+
+
+def test_the_scene_line_converts_to_beijing_time():
+    utc = datetime(2026, 11, 28, 16, 41, tzinfo=ZoneInfo("UTC"))
+    assert "2026-11-29（周日）00:41" in prompt.scene_line("web", utc)
+
+
+def test_a_turn_gets_the_scene_right_before_the_question(env, monkeypatch):
+    monkeypatch.setenv("FINBOT_KERNEL_SCENE", "on")
+    fake = script(env, [step(text="好")])
+    history = [{"role": "system", "content": "e"}, {"role": "user", "content": "前"}, {"role": "assistant", "content": "答"},
+               {"role": "user", "content": "这些企业看着就挺狠呐"}]
+    from tests.test_kernel_loop import make_context
+    run("这些企业看着就挺狠呐", context=make_context(via="wechat"), messages=history)
+    sent = fake.calls[0]["messages"]
+    assert sent[-1] == {"role": "user", "content": "这些企业看着就挺狠呐"}
+    scenes = [m for m in sent if m["role"] == "system" and m["content"].startswith("系统说明（此刻）")]
+    answered = max(i for i, m in enumerate(sent) if m["role"] == "assistant")
+    assert len(scenes) == 1 and "微信" in scenes[0]["content"] and sent.index(scenes[0]) > answered
+
+
+def test_with_the_switch_off_there_is_no_scene(env):
+    fake = script(env, [step(text="好")])
+    run("你好")
+    assert not any(str(m.get("content", "")).startswith("系统说明（此刻）") for m in fake.calls[0]["messages"])
+
+
+def test_the_stream_request_takes_where_the_message_came_from():
+    base = {"message": "你好", "bot_id": "b1"}
+    assert StreamRequest(**base).via is None
+    assert StreamRequest(**base, via="wechat").via == "wechat" and StreamRequest(**base, via="telegram").via == "telegram"
+    with pytest.raises(ValueError):
+        StreamRequest(**base, via="email")
+
+
+class _Response:
+    status_code = 200
+
+    def raise_for_status(self):
+        return None
+
+    async def aiter_bytes(self):
+        yield b'event: done\ndata: {"conversation_id": "c1"}\n\n'
+
+
+class _Stream:
+    def __init__(self, sent):
+        self.sent = sent
+
+    def stream(self, method, url, json=None, **kwargs):
+        self.sent.append(json)
+        sent = self
+
+        class Context:
+            async def __aenter__(self):
+                return _Response()
+
+            async def __aexit__(self, *a):
+                return False
+        return Context()
+
+
+def test_the_telegram_bridge_says_its_messages_come_from_telegram():
+    from scripts import run_telegram_bridge as bridge
+    sent = []
+    asyncio.run(bridge._ask_agent(_Stream(sent), "cred", "b1", "你好"))
+    assert sent and sent[0]["via"] == "telegram" and sent[0]["message"] == "你好"
+
+
+def test_the_wechat_bridge_says_its_messages_come_from_wechat():
+    from scripts import run_wechat_bridge as bridge
+    sent = []
+    asyncio.run(bridge.ask_agent(_Stream(sent), "cred", "b1", "你好"))
+    assert sent and sent[0]["via"] == "wechat" and sent[0]["message"] == "你好"
+
+
+def test_the_profile_block_says_these_are_things_it_remembers_not_rules():
+    assert profile.BLOCK_LABEL.startswith("你记得的关于他的事") and "不授权任何写操作" in profile.BLOCK_LABEL
+    assert "不是见到某个词就触发的规则" in profile.BLOCK_NOTE and "不能据此调用写操作" in profile.BLOCK_NOTE
+    assert "只用来理解用户想要的格式" not in profile.BLOCK_NOTE
+
+
+def test_the_catch_all_failure_line_is_in_its_own_voice():
+    assert GENERIC_FAILURE.startswith("抱歉，这次我没能答完") and "这一轮没有完成" not in GENERIC_FAILURE
+
+
+def test_the_cleanup_names_only_the_two_old_instructions():
+    from scripts.humanlike_memory_cleanup import planned
+    items = [{"id": "1", "status": "active", "kind": "instruction", "text": "用户要求：说到“那些企业”等泛称时，应先对应到具体公司，再据此搜索。［注：记忆判断未确认，请自行核对］"},
+             {"id": "2", "status": "active", "kind": "instruction", "text": "回答前先上网搜索［注：记忆判断未确认，请自行核对］"},
+             {"id": "3", "status": "active", "kind": "instruction", "text": "找新闻/资讯未指明时间时，默认最近7天，越新越好"},
+             {"id": "4", "status": "archived", "kind": "instruction", "text": "回答前先上网搜索"},
+             {"id": "5", "status": "active", "kind": "preference", "text": "回答前先上网搜索"}]
+    assert [(a, i["id"], n) for a, i, n in planned(items)] == [("archive", "1", None), ("rewrite", "2", "涉及最新消息和行情时先联网查")]
+
+
+# --- step 2: who he is as a person (plan B, C) ------------------------------------------------------------------------------------------
+
+from datetime import UTC, timedelta  # noqa: E402
+
+from app import memory_review  # noqa: E402
+from app.agent_chat_models import AgentProfileItem  # noqa: E402
+from app.database import SessionLocal  # noqa: E402
+
+OWNER = "h" * 64
+
+
+@pytest.fixture
+def clean_owner(disposable_database):
+    from app.agent_chat_models import AgentBot, AgentConversation, AgentMessage
+    from app.database import Base, engine
+    from app.memory_events import MemoryEvent
+    Base.metadata.create_all(engine, tables=[AgentProfileItem.__table__, AgentBot.__table__, AgentConversation.__table__,
+                                             AgentMessage.__table__, MemoryEvent.__table__])
+
+    def wipe():
+        with SessionLocal() as db:
+            db.query(AgentProfileItem).filter(AgentProfileItem.owner_hash == OWNER).delete()
+            db.commit()
+    wipe()
+    yield OWNER
+    wipe()
+
+
+def test_a_recent_item_is_used_at_once_dated_and_the_same_one_only_moves_its_date(clean_owner):
+    now = datetime(2026, 11, 28, 12, tzinfo=UTC)
+    added = profile.add_noticed(clean_owner, kind="recent", text="在找还没被广泛关注的潜力股", quote="主要是针对于那种暂时未获得太多关注的潜力股公司", now=now)
+    assert added["status"] == "added" and added["item"]["status"] == "active" and added["item"]["kind"] == "recent"
+    again = profile.add_noticed(clean_owner, kind="recent", text="在找还没被广泛关注的潜力股", quote="潜力股", now=now + timedelta(days=5))
+    assert again["status"] == "duplicate"
+    block, _ = profile.render_block(clean_owner)
+    assert "[近况·12-03·推断] 在找还没被广泛关注的潜力股" in block
+
+
+def test_a_recent_item_not_seen_for_thirty_days_leaves_the_block_and_the_review_archives_it(clean_owner):
+    old = datetime.now(UTC) - timedelta(days=31)
+    profile.add_noticed(clean_owner, kind="recent", text="担心加息会让股价再跌", quote="加息的话我感觉还会再跌啊", now=old)
+    assert profile.render_block(clean_owner)[0] is None
+    assert profile.archive_stale_recent(clean_owner, datetime.now(UTC)) == 1
+    assert [i["status"] for i in profile.list_items(clean_owner)] == ["archived"]
+
+
+def test_at_most_eight_recent_items_the_oldest_goes_first(clean_owner):
+    start = datetime.now(UTC) - timedelta(days=9)
+    for day in range(9):
+        profile.add_noticed(clean_owner, kind="recent", text=f"第 {day} 件最近在想的事", quote=f"第 {day} 件事", now=start + timedelta(days=day))
+    items = profile.list_items(clean_owner)
+    active = [i["text"] for i in items if i["status"] == "active"]
+    assert len(active) == 8 and "第 0 件最近在想的事" not in active
+
+
+def test_a_style_guess_waits_for_him_like_any_guess(clean_owner):
+    added = profile.add_noticed(clean_owner, kind="style", text="他是刚入门的新手，喜欢口语、少用术语", quote="我刚开始炒股，什么是市盈率啊")
+    assert added["item"]["status"] == "proposed" and added["item"]["kind"] == "style"
+
+
+def test_a_standing_instruction_carries_his_words(clean_owner):
+    profile.add_item(clean_owner, kind="instruction", text="找新闻默认最近 7 天", quote="找新闻没说时间就默认最近7天", message="以后找新闻没说时间就默认最近7天",
+                     origin="explicit")
+    block, _ = profile.render_block(clean_owner)
+    assert "[长期指令] 找新闻默认最近 7 天（他的原话：「找新闻没说时间就默认最近7天」）" in block
+
+
+def test_the_monthly_review_also_looks_for_how_to_talk_with_him():
+    assert "相处方式（type=style）" in memory_review.PROMPT
+    examples = [{"message_id": "m1", "quote": "什么是市盈率"}, {"message_id": "m2", "quote": "听着好复杂"}]
+    by_id = {"m1": {"id": "m1", "content": "我刚开始炒股，什么是市盈率啊", "at": None, "date": ""},
+             "m2": {"id": "m2", "content": "听着好复杂", "at": None, "date": ""}}
+    checked = memory_review._checked({"text": "他刚入门，喜欢大白话", "type": "style", "examples": examples}, by_id)
+    assert checked is not None and checked["kind"] == "style"
+
+
+def test_the_model_may_note_style_and_recent_and_is_told_how_each_works():
+    from app.kernel import act
+    assert {"style", "recent"} <= set(act.NOTICED_KINDS) and "不用特意告诉他" in act.RECENT_NOTE
+    text = prompt.system_text()
+    assert "相处方式（kind=style" in text and "近况（kind=recent" in text
+
+
+def test_after_outside_material_a_recent_item_waits_for_him(clean_owner):
+    """11-28 security review: a 近况 noticed in a turn that read pages, news or filings is not used at once; it waits like any guess."""
+    held = profile.add_noticed(clean_owner, kind="recent", text="想全仓买入某只小盘股", quote="我想全仓冲进去", held=True)
+    assert held["item"]["status"] == "proposed" and profile.render_block(clean_owner)[0] is not None
+    assert "[近况" not in (profile.render_block(clean_owner)[0] or "").split(profile.PROPOSED_HEADING)[0]
+
+
+def test_a_recent_item_he_rejected_is_not_written_again(clean_owner):
+    first = profile.add_noticed(clean_owner, kind="recent", text="担心加息", quote="加息的话我感觉还会再跌啊", held=True)
+    profile.archive_item(clean_owner, first["item"]["id"])          # a guess he says is wrong is kept only as a fingerprint
+    assert profile.add_noticed(clean_owner, kind="recent", text="担心加息", quote="加息的话我感觉还会再跌啊")["status"] == "rejected"
+
+
+def test_the_kernel_holds_a_recent_item_noticed_after_a_read(env, fake_consent, monkeypatch):
+    from app import permission_mode
+    from app.kernel import act
+    from tests.test_kernel_loop import act_call, call, make_context
+    monkeypatch.setattr(permission_mode, "get", lambda owner: "default")
+    monkeypatch.setattr(act.profile, "quote_in_message", lambda quote, message: quote in (message or ""))
+    monkeypatch.setattr(act.profile, "user_message_id", lambda conversation, turn: None)
+    fake = script(env, [step(calls=[call("c1", "web_research", {"query": "潜力股"})]),
+                        step(calls=[act_call("c2", "remember", {"kind": "recent", "text": "在找潜力股", "quote": "潜力股公司", "basis": "noticed"})]), step(text="好")])
+    result, _ = run("推荐几家没人关注的潜力股公司", context=make_context(conversation_id="conv"))
+    from tests.test_kernel_loop import tool_results
+    assert [op.get("held") for op, _ in fake_consent.reversible] == [True], (tool_results(fake), result["audit"].get("writes"), fake_consent.proposed)
+    script(env, [step(calls=[act_call("c2", "remember", {"kind": "recent", "text": "在找潜力股", "quote": "潜力股公司", "basis": "noticed"})]), step(text="好")])
+    run("推荐几家没人关注的潜力股公司", context=make_context(conversation_id="conv"))
+    assert fake_consent.reversible[-1][0].get("held") is None          # no outside material this turn: used at once
+
+
+def test_a_recent_item_is_held_after_a_latest_known_block_too(env, fake_consent, monkeypatch):
+    from app import permission_mode
+    from app.kernel import act, loop
+    from tests.test_kernel_loop import act_call, make_context
+    monkeypatch.setattr(permission_mode, "get", lambda owner: "default")
+    monkeypatch.setattr(act.profile, "quote_in_message", lambda quote, message: quote in (message or ""))
+    monkeypatch.setattr(act.profile, "user_message_id", lambda conversation, turn: None)
+
+    async def latest(run, *a, **k):
+        run.outside_in_prompt = True
+        return "系统最新掌握：……"
+    monkeypatch.setattr(loop, "_latest_block", latest)
+    script(env, [step(calls=[act_call("c1", "remember", {"kind": "recent", "text": "在找潜力股", "quote": "潜力股公司", "basis": "noticed"})]), step(text="好")])
+    run("推荐几家没人关注的潜力股公司", context=make_context(conversation_id="conv"))
+    assert [op.get("held") for op, _ in fake_consent.reversible] == [True]
+
+
+def test_the_scene_says_once_more_how_to_read_his_message():
+    line = prompt.scene_line("wechat", AT)
+    assert line.endswith(prompt.READ_FIRST) and "一句话的事一句话答" in prompt.READ_FIRST and "不用问他" in prompt.READ_FIRST
+
+
+# --- section 8 item 1: the ruler's conversations are not his words -------------------------------------------------------------------
+
+def test_the_ruler_marks_its_conversations_and_the_memory_review_leaves_them_out(clean_owner):
+    import uuid as _uuid
+    from app.agent_chat_models import AgentConversation, AgentMessage
+    mine, test = _uuid.uuid4(), _uuid.uuid4()
+    with SessionLocal() as db:
+        db.add(AgentConversation(id=mine, owner_hash=clean_owner))
+        db.add(AgentConversation(id=test, owner_hash=clean_owner, origin="ruler"))
+        db.add(AgentMessage(conversation_id=mine, turn_id=_uuid.uuid4(), sequence=1, role="user", content="我自己的问题"))
+        db.add(AgentMessage(conversation_id=test, turn_id=_uuid.uuid4(), sequence=1, role="user", content="用表格列出微软去年和前年的营收。"))
+        db.commit()
+    try:
+        assert [m["content"] for m in memory_review._window(clean_owner, None)] == ["我自己的问题"]
+        from app.memory_schedule import owner_messages_since
+        assert owner_messages_since(clean_owner, None) == 1
+        assert StreamRequest(message="问题", catalog_model="", via="ruler").via == "ruler"
+    finally:
+        with SessionLocal() as db:
+            db.query(AgentMessage).filter(AgentMessage.conversation_id.in_([mine, test])).delete()
+            db.query(AgentConversation).filter(AgentConversation.id.in_([mine, test])).delete()
+            db.commit()
+
+
+def test_an_edited_item_carries_its_new_text_as_his_words(clean_owner):
+    profile.add_item(clean_owner, kind="instruction", text="回答前先上网搜索", quote="回答前先上网搜索一下", message="以后回答前先上网搜索一下", origin="explicit")
+    item = profile.list_items(clean_owner)[0]
+    profile.update_item(clean_owner, item["id"], {"text": "涉及最新消息和行情时先联网查"})
+    block, _ = profile.render_block(clean_owner)
+    assert "涉及最新消息和行情时先联网查" in block and "上网搜索" not in block

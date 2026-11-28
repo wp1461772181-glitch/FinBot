@@ -145,3 +145,20 @@ set -a; . /opt/finbot/ruler.env; set +a; export RULER_DATABASE_URL="$DATABASE_UR
 - 每句打印状态、首字和总用时、用到的工具、回答全文；有一句没有正常结束就以 1 退出。
 - 默认连影子的 9031；`--base`、`--model`、`--allow-production` 的含义和 `run` 一样。对线上（8000）发问会以 owner 身份新开一个对话。
 - 题库 `ruler/suites/baseline-v1.json` 由 `ruler/suites/make_baseline_v1.py` 生成；里面的标准数字取自生成当天的影子库，备份换了以后「最近一季」类的题要重新核对。
+
+## 发布（2026-11-28 起用一条命令）
+
+```bash
+deployment/heibao/release.sh            # 默认发布 origin/main；也可以写某个已合并的提交
+```
+
+脚本按顺序做六件事，任何一步失败就停下：
+
+1. 核对这个提交已经合进 origin/main，并且盒子能连上。
+2. 备份数据库。
+3. 把代码包解到 `/opt/finbot/src-new`。
+4. 停服务、整树替换：旧树改名为下一个 `src-oldNNN`，并把 `.env` 和 `data/` 搬到新树。
+5. 起接口并等 `/health`。3 分钟内起不来，就自动换回旧树并重新起服务，然后报错退出。
+6. 起其余三个服务，打印每个服务的状态。
+
+它不碰启动参数、挂载、网络和 Tailscale，停服务一律按服务名，不用 pkill。

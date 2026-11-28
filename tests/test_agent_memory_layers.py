@@ -239,7 +239,8 @@ def test_memory_page_lists_layers_and_moves_edits_and_deletes_items(team, client
     moved = client.patch(f"/agent-chat/profile/{mine['id']}", headers=H, json={"bot_id": team["news"]["bot_id"]}).json()["item"]
     assert moved["bot_id"] == team["news"]["bot_id"] and "服务收入" not in _block(team["apple"])
     edited = client.patch(f"/agent-chat/profile/{mine['id']}", headers=H, json={"text": "盯苹果服务收入"}).json()["item"]
-    assert edited["text"] == "盯苹果服务收入" and edited["quote"] == "看服务收入" and edited["bot_id"] == team["news"]["bot_id"]
+    # 11-28 (humanlike review): what he typed on the page is his word now; the edit event keeps the old text
+    assert edited["text"] == "盯苹果服务收入" and edited["quote"] == "盯苹果服务收入" and edited["bot_id"] == team["news"]["bot_id"]
     assert client.patch(f"/agent-chat/profile/{mine['id']}", headers=H, json={"bot_id": str(uuid.uuid4())}).status_code == 422
     assert client.patch(f"/agent-chat/profile/{mine['id']}", headers=H, json={"text": ""}).status_code == 422
     assert client.patch(f"/agent-chat/profile/{uuid.uuid4()}", headers=H, json={"text": "x"}).status_code == 404

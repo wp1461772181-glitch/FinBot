@@ -124,9 +124,9 @@ def test_request_carries_message_model_conversation_and_credential(server):
     ask(server.base, "cred-xyz", "问题", catalog_model="haiku-5.5", conversation_id="c1")
     ask(server.base, "cred-xyz", "问题", catalog_model="haiku-5.5")
     with_conversation, without_conversation = server.requests
-    assert with_conversation.body == {"message": "问题", "catalog_model": "haiku-5.5", "conversation_id": "c1"}
+    assert with_conversation.body == {"message": "问题", "catalog_model": "haiku-5.5", "conversation_id": "c1", "via": "ruler"}
     assert with_conversation.headers["X-Chat-Session"] == "cred-xyz"
-    assert without_conversation.body == {"message": "问题", "catalog_model": "haiku-5.5"}
+    assert without_conversation.body == {"message": "问题", "catalog_model": "haiku-5.5", "via": "ruler"}
     assert without_conversation.headers["X-Chat-Session"] == "cred-xyz"
 
 

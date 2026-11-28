@@ -79,7 +79,7 @@ export function manualItemDraft({ kind, text, layer } = {}) {
   const clean = String(text ?? "").split(/\s+/).filter(Boolean).join(" ");
   if (!clean) return { error: "先写下要记住的内容。" };
   if (clean.length > 200) return { error: "最多 200 个字。" };
-  if (!["preference", "about_me", "instruction"].includes(kind)) return { error: "请选择类型。" };
+  if (!["preference", "about_me", "instruction", "style", "recent"].includes(kind)) return { error: "请选择类型。" };
   return { fields: { kind, text: clean, bot_id: layer ? String(layer) : null } };
 }
 

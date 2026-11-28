@@ -134,6 +134,8 @@ from .work_api import router as work_router
 app.include_router(work_router)
 from .permission_api import router as permission_router
 app.include_router(permission_router)
+from .follow_up_api import router as follow_up_router
+app.include_router(follow_up_router)
 from .agent_skills_api import router as agent_skills_router
 app.include_router(agent_skills_router)
 from .sentinel_api import router as sentinel_router
@@ -190,6 +192,7 @@ def create_tables() -> None:
     from . import earnings_calendar  # noqa: F401  (registers earnings_calendar, 5e-1)
     from . import missed_reports  # noqa: F401  (registers missed_reports, 11-28)
     from . import permission_mode  # noqa: F401  (registers permission_settings, 11-28)
+    from . import follow_ups  # noqa: F401  (registers agent_follow_ups, 11-28)
     # V2 schema changes are applied only by its explicit, locked migration.
     # Keep the longstanding startup behavior for legacy tables alone.
     Base.metadata.create_all(

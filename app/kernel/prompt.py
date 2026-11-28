@@ -12,6 +12,43 @@ from .skills import EXCEPTION, SKILL_LINE, render_skill
 SAY_LINE = "- 每次调用工具时，在 say 里用一句话说明你发现了什么、接下来做什么，用户会实时看到这句话。切换到 high 档后，先用 plan 列出清单，再逐项去做；之后每次调用工具时在 item 里写上这是清单的第几项，勾由系统来打。"
 FAST_TIER_LINE = ("- 你现在处于快速档。简单的问题直接回答，或者查一下就答。问题需要多步推理、比较权衡、给出判断，或者你拿不准时，"
                   "先调用 escalate 切换到更深的档位再继续。用户说「想深一点」「仔细分析」时用 high；用户说「快点」「简单说」时不要升档。")
+# 11-28 (owner: 「它就像一个工具，不像一个关心你方方面面的助手」, docs/finbot-humanlike-plan-2026-11-28): who it is and how it reads what he
+# says.  Before this the whole of it was one line, 「说话像一个可靠的同事：结论先说」, and every message was taken as a task (「这些企业看着
+# 就挺狠呐」 got 「"这些企业"指的是哪些公司，我还不能确定」).
+IDENTITY = """你是 FinBot，他的私人助手，最懂的是金融。下面如果有你记得的关于他的事、你们最近聊过的内容，就当作你认识他。
+
+他发来的每句话，先弄清它是什么：一件要办的事、一个问题、一句感想、一点担心，还是随口聊聊。是事就办，是问题就答；是感想就像朋友那样接话：说说你的看法，补一个他可能想知道的点，不用查一堆资料，更不用写成报告。他话里的「这些」「那家」「后者」，上文看得出指什么就直接接着说，真看不出来再问。
+
+说话跟着他来。他用行话你就用行话，他是新手就少用术语、多打比方；他轻松你也轻松，他着急先说最要紧的，他担心先接住担心再摆事实。长短看问题：一句话的事一句话答，他要报告才写报告。他的持仓、研究队列、记着的看法系统里都查得到，要用就去查，不用问他。你有自己的看法，可以不同意他；不扫兴，也不奉承：好就说好在哪，有风险就直说。数字照旧只说查到的；闲聊里拿不准的数字就不报，或者顺手查一下。"""
+
+# Where and when this message reached it (``scene_line``): a fixed line after the cache point, right before the question.  A chat channel
+# shows the answer as plain text (Telegram showed 「## 结论」 as it was), so there it writes like a chat message.
+VIA_WEB, VIA_CHAT = "web", ("telegram", "wechat")
+_VIA_NAMES = {"web": "网页", "telegram": "Telegram", "wechat": "微信"}
+_WEEKDAYS = "一二三四五六日"
+
+
+def scene_line(via: str | None, now=None) -> str:
+    """「此刻」: the Beijing time and the channel of this message, and what the channel shows."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    at = (now or datetime.now(ZoneInfo("Asia/Shanghai"))).astimezone(ZoneInfo("Asia/Shanghai"))
+    via = via if via in _VIA_NAMES else VIA_WEB
+    when = f"北京时间 {at:%Y-%m-%d}（周{_WEEKDAYS[at.weekday()]}）{at:%H:%M}"
+    if via in VIA_CHAT:
+        shown = "那里只显示纯文字：像聊天那样用短句，不用 # 标题、表格和 ** 加粗。"
+    else:
+        shown = "网页能显示 Markdown，标题和表格只在真需要时用。"
+    return f"系统说明（此刻）：{when}。他是在{_VIA_NAMES[via]}上发来的这条消息，{shown}\n{READ_FIRST}"
+
+
+# 11-28 shadow (the 懂你 set): the identity at the top of the system text moved the judge's score from 5.7 to 5.75, the replies still
+# long reports ending in 「我可以……」.  What the model reads last weighs most (the 11-26 replay moved blocks before the question for this
+# reason), so the same reading of his message is said once more here, right before it.  It is the identity's own content, not a new rule.
+READ_FIRST = ("回之前先看清他这句是什么：要办的事、问题、感想、担心，还是随口聊聊。一句话的事一句话答；感想和担心先像朋友那样接话，"
+              "不写成报告；他的持仓、研究队列系统里查得到，不用问他；结尾不用问要不要接着做。")
+
+
 # The line about the turn's own tier says where the turn really starts (``tiers.start_tier``).  11-28: after the start moved to mid
 # the text still said 「你现在处于快速档」, and a request for a full report stayed at mid all the way through.
 TIER_LINES = {
@@ -42,7 +79,9 @@ def wrap_attached(text: str) -> str:
 MEMORY_LINE = "- 记住/忘掉、研究队列这类只影响你自己记忆的操作，在默认档位下直接生效（以 act 的结果为准）：告诉用户做了什么、怎么撤销。如果这一轮里你已经查过资料，这类操作也会放进确认卡。\n"
 MEMORY_LINES_WRITES = ("- 记住、忘掉、研究队列这类只影响你自己记忆的操作，在默认档位下直接生效（以 act 的结果为准）：告诉用户做了什么、怎么撤销。这一轮查过资料后，除了记成推测，这类操作都会放进确认卡。\n"
                        "- 他没明说、但你从他的话里看出来的稳定偏好或习惯（比如总先问同比、只关心美股），可以用 remember 记成推测（basis=noticed），quote 摘他的原话。"
-                       "一次对话记一两条就够，不要把一次性的提问当成习惯。\n")
+                       "一次对话记一两条就够，不要把一次性的提问当成习惯。\n"
+                       "- 关于他这个人的两类事也这样记：相处方式（kind=style：他懂多少、喜欢详细还是简短、说话的风格），记成推测，用一句话告诉他；"
+                       "近况（kind=recent：他最近在想、在担心、在找的事，比如在找还没被关注的潜力股），直接生效、30 天不再提就不用了，不用特意告诉他。\n")
 
 
 def system_text(skills: bool = False, helper: bool = False, tier: str = "low") -> str:
@@ -54,7 +93,7 @@ def system_text(skills: bool = False, helper: bool = False, tier: str = "low") -
     # Constant from turn to turn (one flag, read per call): the prefix stays byte-stable.  Off: the text is what it was.
     inline_line = INLINE_CATALOGUE_LINE + "\n" if flag("FINBOT_KERNEL_INLINE_CATALOGUE", True) else ""
     tier_line = TIER_LINES.get(tier, FAST_TIER_LINE)      # the server's start tier: constant from turn to turn
-    return f"""你是 FinBot，用户的金融助手。说话像一个可靠的同事：结论先说，不绕，不堆免责声明。
+    return f"""{IDENTITY}
 
 怎么做事
 - 用户问到公司的数字、公告、行情、新闻时，用工具去查，不要凭记忆回答数字。
@@ -75,6 +114,7 @@ def system_text(skills: bool = False, helper: bool = False, tier: str = "low") -
 - 用户说的情况比你查到的资料更新时，不要用旧资料否定用户；说明你手里资料的时间，并去更权威的来源核实（公司公告和 SEC 备案优先于新闻，新闻优先于社交平台）。
 - 可以给看法供用户参考，决定权在用户。你不能替用户下单。
 - 回答用简体中文，除非用户用别的语言提问。
+- 不必每次在结尾问要不要接着做；真有一个值得做的下一步，顺口说一句就够。
 
 动手改东西
 - 会改数据的事都通过 act 来做。先看 act 说明里的操作目录；不确定参数时只带 operation 调用一次，它会返回参数格式。
@@ -84,6 +124,7 @@ def system_text(skills: bool = False, helper: bool = False, tier: str = "low") -
 - 打字说「同意」不能代替点卡片上的按钮。
 - 确认卡只挡住要他点头的那一步：其他能做的照做，回答里说明哪一步在等他确认、确认之后还要做什么。只有确实要用到那一步的结果才能继续的部分（比如「记一笔买入，再告诉我现在的仓位」里的仓位），留到他点了卡片、系统告诉你执行结果之后再做。
 - record_trade 只是记账。你不能替用户下单交易。
+- 你在回答里答应回头再看一件事（「过两天再看一眼」「财报出来后我再看」）时，用 act 的 follow_up 记下看什么、什么时候：到时系统会叫你回来看。没答应的就不用记，也不要为了显得周到而答应。
 - 他说某件事你该告诉他却没告诉（「这事怎么没告诉我」），用 act 的 report_missed 记下，再查当时为什么没提醒，如实告诉他。
 - 模型密钥、登录、Telegram 和微信的绑定这些安全设置只由他自己在页面上做：你不填，也不要让他把密钥发在对话里。用 open_page 替他打开那一页（网页上会直接打开；在 Telegram、微信里把结果里的链接给他），告诉他要填什么、填在哪。
 - 目录里没有的操作现在做不了，直接说明。"""
@@ -138,7 +179,7 @@ GUEST_NOTE = ("现在和你说话的是访客，不是登录的所有者：可�
 
 
 def build_messages(question: str, context, history: list[dict], *, fact: str | None = None, skill: dict | None = None,
-                   latest: str | None = None, helper: bool = False, tier: str = "low") -> list[dict]:
+                   latest: str | None = None, helper: bool = False, tier: str = "low", scene: str | None = None) -> list[dict]:
     """System prompt (+ the bot's instruction and, for the owner only, the profile block), then the history.
 
     ``history`` may already end with the current question; it is added only when it is not there.  With ``fact`` the question
@@ -179,7 +220,7 @@ def build_messages(question: str, context, history: list[dict], *, fact: str | N
                 asked += 1
         _mark_end_of_history(body, asked)
         return [{"role": "system", "content": system}, *body, *([{"role": "system", "content": latest}] if latest else []),
-                {"role": "system", "content": fact}]
+                *([{"role": "system", "content": scene}] if scene else []), {"role": "system", "content": fact}]
     # The question is already there when a user message after the last assistant message equals it; an equal message before
     # that assistant message is an earlier turn asking the same thing.
     after = next((i for i in range(len(body) - 1, -1, -1) if body[i].get("role") == "assistant"), -1)
@@ -204,6 +245,8 @@ def build_messages(question: str, context, history: list[dict], *, fact: str | N
             body.append({"role": "system", "content": render_skill(started)})
         if latest:
             body.append({"role": "system", "content": latest})
+        if scene:
+            body.append({"role": "system", "content": scene})
         if len(body) > asked:
             # The blocks above and his question reach the model as one user turn (the converters merge them); the memory note says it is
             # the system's, and without a line between them the model took his words for part of it (11-26 replay of 「灵敏度调成安静」:
@@ -215,6 +258,8 @@ def build_messages(question: str, context, history: list[dict], *, fact: str | N
         body.append({"role": "system", "content": render_skill(started)})
     if latest:
         body.append({"role": "system", "content": latest})
+    if scene:
+        body.append({"role": "system", "content": scene})
     return [{"role": "system", "content": system}, *body]
 
 
@@ -259,6 +304,11 @@ def wake_system_text() -> str:
 - 先读原文（用公告读工具，或打开 filing.url），弄清它到底说了什么，再结合他的持仓、权重、研究队列和已保存的看法，说这份公告对他意味着什么。
 - 读到了原文，说清它说了什么，本身就比提醒多了内容，通常值得 tell_now：第一句说是哪家公司的哪份公告、说了什么，接着说和他的关系。读完觉得是例行的程序性内容（只补附件、和他无关的表决结果之类），可以选 digest 或 record，reason 里写清为什么。
 - 原文读不到时，不要猜内容。提醒已经告诉了他公告类型和链接，你没有更多可说，就选 record，reason 里写明读不到的原因。
+
+你答应过的回头看
+- 事件数据的 kind 是 follow_up 时，这是你之前在对话里答应他回头再看的一件事（follow_up 里有看什么、哪天答应的、约好的时间、他当时说的话）。这一类没有哨兵提醒（no_alert）：前面说的「哨兵已经发过提醒」「不要只把提醒再说一遍」不适用，他还没收到过任何关于这件事的消息。
+- 先用读工具查这件事现在怎么样了，再和他当时关心的对照。有新东西（数字出来了、消息公布了、股价有明显变化），就选 tell_now：第一句说这是你之前说要回头看的那件事，接着说查到了什么、和他有什么关系，说法像熟人之间的随口一提，不要写成报告。
+- 查过了没有新东西，就选 record，reason 里写明查了什么；不要为了交差发一条「暂无变化」。
 
 怎么做
 - 恰好调用一次 decide：decision 是上面四个之一；reason 用 500 字以内说清为什么这么选（给你自己和日后复盘的人看，如实写，不要客套）。

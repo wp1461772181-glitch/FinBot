@@ -206,7 +206,7 @@ def test_a_turn_from_telegram_sends_only_the_bot_id_and_reads_the_stream(owner):
             bodies.append(json)
             return Stream()
     answer, cards, conversation = asyncio.run(bridge._ask_agent(Client(), OWNER, "bot-1", "去年营收多少"))
-    assert bodies == [{"bot_id": "bot-1", "message": "去年营收多少"}]  # no provider, model or key
+    assert bodies == [{"bot_id": "bot-1", "message": "去年营收多少", "via": "telegram"}]  # no provider, model or key; where it came from (11-28)
     assert answer == "营收"  # chat text: no [n], no sources list
     assert cards == [{"request_id": "r", "choices": [], "id": "r"}] and conversation == "line-1"
 

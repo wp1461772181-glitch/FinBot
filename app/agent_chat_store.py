@@ -18,9 +18,9 @@ def owner_hash(credential: str)->str: return hashlib.sha256(credential.encode())
 def _message_bytes(m):
     return layers.row_bytes({"role":m.role,"content":m.content,"tool_calls":m.tool_calls,
                              "tool_call_id":m.tool_call_id,"status":m.status,"turn_id":str(m.turn_id)})
-async def create_conversation(credential: str)->str:
+async def create_conversation(credential: str, origin: str | None = None)->str:
     async with Session() as s:
-        obj=AgentConversation(owner_hash=owner_hash(credential)); s.add(obj); await s.commit(); return str(obj.id)
+        obj=AgentConversation(owner_hash=owner_hash(credential),origin=origin); s.add(obj); await s.commit(); return str(obj.id)
 async def verify_conversation(conversation_id: str, credential: str)->bool:
     try: cid=uuid.UUID(conversation_id)
     except ValueError:return False
@@ -329,6 +329,8 @@ def ensure_conversation_archive_column() -> None:
         connection.execute(text("ALTER TABLE agent_conversations ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ"))
         # The bot whose line a conversation is (agent_bots); NULL until the default bot adopts it.
         connection.execute(text("ALTER TABLE agent_conversations ADD COLUMN IF NOT EXISTS bot_id UUID"))
+        # Where a conversation came from when it was not the owner ("ruler"): left out of the memory review (11-28).
+        connection.execute(text("ALTER TABLE agent_conversations ADD COLUMN IF NOT EXISTS origin VARCHAR(16)"))
         connection.execute(text("CREATE INDEX IF NOT EXISTS ix_agent_conversations_bot_id ON agent_conversations (bot_id)"))
         # The turns a summary covers, by id (3c: turns that ran together overlap in their rows).  Older segments keep NULL and read by range.
         connection.execute(text("ALTER TABLE IF EXISTS agent_conversation_summaries ADD COLUMN IF NOT EXISTS turn_ids JSON"))

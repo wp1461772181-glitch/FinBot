@@ -81,3 +81,18 @@ test("an upload is ready with a file, title, link and reason; AI-derived text is
   assert.equal(retrievalText({ result: { ok: true }, citations: [] }), '{\n  "result": {\n    "ok": true\n  },\n  "citations": []\n}');
   assert.equal(retrievalText({ result: { ok: true, data: [{ title: "AAPL 10-Q（2026 财年第四季度）", snippet: "Services revenue grew year over year.", score: 0.83 }] }, citations: [{ index: 1, title: "AAPL 10-Q（2026 财年第四季度）", url: "https://example.test/docs/01" }] }), BASE.knowledge.retrieval["upload-AAPL"].pre);
 });
+
+// 11-28 活人感: 相处方式 and 近况 are shown apart; a 近况 has no 确认.
+import { KIND_LABELS, KINDS, canConfirm, isPortrait } from "../src/app/assistant/memory/memory-view.mjs";
+import { manualItemDraft } from "../src/memory-items.mjs";
+test("style and recent are kinds of their own, shown apart, and a recent one needs no confirmation", () => {
+  assert.equal(KIND_LABELS.style, "相处方式");
+  assert.equal(KIND_LABELS.recent, "近况");
+  assert.ok(KINDS.includes("style") && KINDS.includes("recent"));
+  assert.equal(isPortrait({ kind: "recent", status: "active" }), true);
+  assert.equal(isPortrait({ kind: "style", status: "proposed" }), false);
+  assert.equal(isPortrait({ kind: "preference", status: "active" }), false);
+  assert.equal(canConfirm({ kind: "recent", origin: "inferred" }), false);
+  assert.equal(canConfirm({ kind: "style", origin: "inferred" }), true);
+  assert.ok(manualItemDraft({ kind: "style", text: "说话轻松点" }).fields);
+});

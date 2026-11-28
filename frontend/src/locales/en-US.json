@@ -2795,5 +2795,14 @@
   "下单交易、填密钥和登录凭证，它永远不做。": "It never places trades or enters keys or login credentials.",
   "对话里说「这次不用确认，直接做」，只对那一轮生效。": "Saying “no need to confirm, just do it” in a chat applies to that turn only.",
   "删除以外的操作都直接做，不弹确认卡；做完在回答里逐条告诉你做了什么、怎么撤销。": "Everything except deleting runs at once with no confirmation card; the answer then lists what was done and how to undo it.",
-  "不论哪一档：删除永远先问你；它在这一轮查过网页、新闻或申报之后，要改你数据的操作也放进确认卡，免得被资料里的话支使。": "In every mode: deleting always asks you first, and once it has looked at web pages, news or filings in a turn, any action that would change your data waits on a card too, so nothing in that material can steer it."
+  "不论哪一档：删除永远先问你；它在这一轮查过网页、新闻或申报之后，要改你数据的操作也放进确认卡，免得被资料里的话支使。": "In every mode: deleting always asks you first, and once it has looked at web pages, news or filings in a turn, any action that would change your data waits on a card too, so nothing in that material can steer it.",
+  "相处方式": "How to talk with you",
+  "近况": "Lately",
+  "它对你的了解": "What it knows about you",
+  "它从你们的聊天里看出来的：怎么和你说话（相处方式），和你最近在想的事（近况，30 天没再提就不再用）。不对就改或删。": "What it picked up from your chats: how to talk with you, and what is on your mind lately (a “lately” item stops being used after 30 days without coming up again). Edit or delete anything that is wrong.",
+  "它记着要回头看的事": "Things it will look at again",
+  "已取消，它不会再回来看这件事。": "Cancelled. It will not come back to this.",
+  "取消失败，请重试。": "Couldn't cancel. Please try again.",
+  "它在对话里答应过回头再看的事。到时间它会去查，有新东西才告诉你；一天最多一条，夜里不打扰。": "Things it promised in a chat to look at again. When the time comes it checks and tells you only if there is something new: at most one a day, never at night.",
+  "不属于任何模型条目的调用（保存模型前的连接测试、知识库向量化），没有地方填价格": "calls that belong to no model entry (the test before saving one, the knowledge index's embedding), so there is nowhere to price them"
 }

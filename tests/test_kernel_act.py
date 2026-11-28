@@ -37,7 +37,7 @@ def test_every_operation_is_a_catalogue_write_and_every_write_is_listed():
 def test_summaries_costs_and_tiers():
     assert all(act.SUMMARIES[name] for name in act.OPERATIONS) and set(act.SUMMARIES) == set(act.OPERATIONS)
     assert set(act.COST_NOTES) == set(act.TIER3) | set(act.PUBLIC_FETCH)      # 11-28: fetching moved to tier 1, its card note stays (shown in the 每步都问 mode)
-    assert len(set(act.OPERATIONS)) == len(act.OPERATIONS) == 47
+    assert len(set(act.OPERATIONS)) == len(act.OPERATIONS) == 49      # 11-28: follow_up and cancel_follow_up
     assert [act.tier_of(n) for n in ("remember", "record_trade", "forecast", "ingest_web_source", "fetch_sec", "revise_forecast")] == [1, 2, 3, 3, 1, 3]
     assert act.TIER1[0] == "remember" and act.TIER1[-len(act.PUBLIC_FETCH):] == act.PUBLIC_FETCH and act.TIER3[-1] == "revise_forecast"
     assert act.SUMMARIES["ingest_web_source"].startswith("把这段对话里联网搜到的一个网页或新闻存进资料库")
@@ -231,6 +231,7 @@ MINIMAL = {
     "rate_alert": {"verdict": "useful", "quote": "用中文回答"},
     "rate_answer": {"verdict": "bad", "reason": "数据太旧了"},
     "report_missed": {"what": "英伟达 11-17 跌了 6% 没提醒我", "symbol": "NVDA"},
+    "follow_up": {"what": "看 ARDT 财报后的股价反应", "due": "2099-01-02 09:00", "symbol": "ARDT"}, "cancel_follow_up": {"follow_up_id": 7},
     "set_watch_rule": {"symbol": "INTC", "metric": "day_change", "levels": [{"threshold": 10, "level": "remind"}], "quote": "用中文回答"},
     "delete_watch_rule": {"rule_id": UUID},
     "set_watch_preset": {"key": "concentration", "enabled": False}, "set_alert_settings": {"sensitivity": "quiet"},
@@ -287,6 +288,9 @@ def faked(monkeypatch):
     monkeypatch.setattr(profile, "resolve_handle", lambda *a, **k: {"text": "用中文"})
     monkeypatch.setattr(agent_tasks, "get_task", lambda *a: fake_preview("o", {}))
     monkeypatch.setattr(write_text, "source_display_title", lambda *a: "某材料")
+    from app import follow_ups
+    monkeypatch.setattr(follow_ups, "check", lambda owner, due, now=None: None)
+    monkeypatch.setattr(follow_ups, "open_items", lambda owner: [{"id": 7, "what": "看 ARDT 财报后的股价反应", "symbol": "ARDT"}])
     monkeypatch.setattr(portfolio, "describe_write", lambda *a: {"title": "t", "targets": [{"symbol": "AAPL"}], "alternative": "a"})
     monkeypatch.setattr(directory_ops, "describe", lambda owner, name, args: {"title": "t", "targets": [{"kind": "k"}], "alternative": "a"})
     monkeypatch.setattr(sec_sources, "prepare_filing", lambda name, args, financial_only=False: {
