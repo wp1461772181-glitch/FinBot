@@ -733,7 +733,8 @@ async def _run_turn(question: str, context, emit, messages: list[dict] | None = 
         company = getattr(context, "default_company", None)
         latest = await _latest_block(run, run.question if fact else question, _previous_user_message(history, run.question if fact else question, original=bool(fact)),
                                      company.get("symbol") if isinstance(company, dict) else None, owner)
-        run.messages = prompt.build_messages(question, context, history, fact=fact, skill=started, latest=latest, helper=helper.DELEGATE in run.tool_names)
+        run.messages = prompt.build_messages(question, context, history, fact=fact, skill=started, latest=latest, helper=helper.DELEGATE in run.tool_names,
+                                           tier=run.start_tier)
         if started:
             run.outside_in_prompt = True     # a skill's steps can be imported text
         if started and owner_credential_matches(getattr(context, "identity_credential", "")):

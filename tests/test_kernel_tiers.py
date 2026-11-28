@@ -351,3 +351,16 @@ def test_a_guest_starts_mid_too_and_a_helper_and_a_wake_turn_stay_low():
     from app.kernel import helper
     assert 'tier="low"' in inspect.getsource(helper)            # a helper's brief is a lookup
     assert "start_tier" not in inspect.getsource(loop.run_wake)  # the frequent background check keeps starting low
+
+
+def test_the_system_text_says_the_tier_the_turn_really_starts_at(env):
+    """11-28: the start moved to mid, the text still said 快速档, and a full-report request never left mid."""
+    env.monkeypatch.delenv("FINBOT_KERNEL_START_TIER", raising=False)
+    fake = script(env, [step(text="好")])
+    run(context=make_context())
+    system = fake.calls[0]["messages"][0]["content"]
+    assert prompt.TIER_LINES["mid"] in system and "快速档" not in system and "要一份报告" in prompt.TIER_LINES["mid"]
+    env.monkeypatch.setenv("FINBOT_KERNEL_START_TIER", "low")
+    fake = script(env, [step(text="好")])
+    run(context=make_context())
+    assert prompt.FAST_TIER_LINE in fake.calls[0]["messages"][0]["content"]
