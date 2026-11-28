@@ -546,4 +546,30 @@ def test_resend_hands_each_finding_to_the_duty_turn_once(monkeypatch):
 
 def test_the_duty_prompt_says_how_to_send_a_missed_alert_again():
     text = prompt.wake_system_text()
-    assert "漏报补发" in text and "kind 是 missed" in text and "第一句说这是补发" in text
+    assert "漏报补发" in text and "kind 是 missed" in text and "说清这是补发" in text and "也可能本来就不值得打扰他" in text
+
+
+
+def test_a_missed_alert_is_not_already_sent_and_does_not_make_a_night_digest(owner, monkeypatch):
+    """Review 11-28: a missed alert sent again before 08:00 is held for the brief, but it is not something the sentinel held (no night
+    digest went out for it), and the duty turn must not be told he already has it."""
+    from app.kernel import wake
+    event = {"alert_id": selfcheck.RESEND_BASE + 1, "symbol": "ANT", "kind": "missed", "text": "【漏报补发】ANT 跌 8.4%", "deferred": True}
+    relation = wake._facts(OWNER_HASH, wake.clean_event(event))[0]
+    assert relation["already_sent"] is False
+    assert wake._facts(OWNER_HASH, wake.clean_event({**event, "kind": "price"}))[0]["already_sent"] is False      # night-held: also not sent
+    assert wake._facts(OWNER_HASH, wake.clean_event({**event, "kind": "price", "deferred": False}))[0]["already_sent"] is True
+    duty_log.record(OWNER_HASH, event["alert_id"], event=event, mode="on", outcome="decided", decision="tell_now", message="补发", delivery="held_night")
+    gathered = brief.gather(OWNER_HASH, datetime.now(UTC) - timedelta(hours=1))
+    assert gathered["night_digest_sent"] is False and [h["text"] for h in gathered["held"]] == ["【漏报补发】ANT 跌 8.4%"]
+
+
+def test_a_finding_the_duty_turn_told_is_not_listed_again_by_the_brief(owner):
+    row_id = duty_selfcheck.claim(OWNER_HASH, "2026-11-25")
+    told, recorded = {"kind": "price", "symbol": "ANT", "at": "2026-11-24 09:40", "text": "ANT 跌 8.4%"}, {"kind": "price", "symbol": "INTC", "at": "2026-11-24 10:00", "text": "INTC 跌 5%"}
+    duty_selfcheck.finish(row_id, outcome="done", findings=[told, recorded], checked={"errors": {}}, ms=1)
+    duty_log.record(OWNER_HASH, selfcheck.RESEND_BASE + row_id * 100, event={"symbol": "ANT", "kind": "missed"}, mode="on", outcome="decided", decision="tell_now",
+                    message="补发", delivery="held_night")
+    duty_log.record(OWNER_HASH, selfcheck.RESEND_BASE + row_id * 100 + 1, event={"symbol": "INTC", "kind": "missed"}, mode="on", outcome="decided", decision="record")
+    findings, _, ids = brief.missed_findings(OWNER_HASH)
+    assert [f["symbol"] for f in findings] == ["INTC"] and row_id in ids      # told by the duty turn: not a second time; recorded: still a line

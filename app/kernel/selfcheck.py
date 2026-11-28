@@ -282,9 +282,10 @@ def resend_event(row: dict, index: int, finding: dict, held: set[str], now: date
     return event
 
 
-async def resend(row: dict | None, owner: str, now: datetime, snapshot: dict | None = None) -> list[dict]:
+async def resend(row: dict | None, owner: str, now: datetime | None = None, snapshot: dict | None = None) -> list[dict]:
     """Hand every finding of a finished check to the duty turn, one after another; returns their ``duty_log`` rows.  A finding already
-    judged (the same check run again) is not judged twice: wake keeps one row per alert id."""
+    judged (the same check run again) is not judged twice: wake keeps one row per alert id.  Whether a finding waits for the morning
+    brief is decided when its turn starts (``now`` fixes it, for the replay): one judged after 08:00 is sent at once."""
     if not row or row.get("outcome") != "done" or not row.get("findings"):
         return []
     if snapshot is None:
@@ -298,7 +299,7 @@ async def resend(row: dict | None, owner: str, now: datetime, snapshot: dict | N
         if not finding.get("symbol"):
             continue
         try:
-            judged.append(await wake.wake(resend_event(row, index, finding, held, now), owner_hash=owner))
+            judged.append(await wake.wake(resend_event(row, index, finding, held, now or datetime.now(UTC)), owner_hash=owner))
         except Exception:
             logger.exception("missed-alert check: finding %s could not be sent again", index)
     return judged

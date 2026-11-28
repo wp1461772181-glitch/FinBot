@@ -191,7 +191,7 @@ def run_selfcheck() -> None:
     if row:
         log.info("missed-alert check %s: %s (%s found, errors %s)", row.get("day"), row.get("outcome"), len(row.get("findings") or []),
                  sorted((row.get("checked") or {}).get("errors") or {}))
-        judged = asyncio.run(selfcheck.resend(row, owner, now))        # each finding sent again through the duty turn (design 7.2)
+        judged = asyncio.run(selfcheck.resend(row, owner))        # each finding sent again through the duty turn (design 7.2)
         if judged:
             log.info("missed-alert check %s: %s sent again (%s)", row.get("day"), len(judged), [r.get("decision") or r.get("outcome") for r in judged])
 

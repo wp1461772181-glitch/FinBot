@@ -99,7 +99,8 @@ def _facts(owner: str, event: dict) -> tuple[dict, list[dict], list[dict], list[
     symbols = [s for s in (event.get("members") or [event.get("symbol")]) if isinstance(s, str)]
     relation = {"symbols": symbols, "held": bool(event.get("held")), "weight_pct": event.get("weight_pct"),
                 "in_research_queue": None, "research_queue": []}
-    relation["already_sent"] = not bool(event.get("deferred"))      # a night-held alert (deferred) has not reached him yet
+    # a night-held alert (deferred) has not reached him yet, nor has a missed one sent again by the morning check
+    relation["already_sent"] = not bool(event.get("deferred")) and event.get("kind") != "missed"
     tier = event.get("tier")
     if isinstance(tier, int) and not isinstance(tier, bool) and tier in TIER_LABELS:
         relation["tier_label"] = TIER_LABELS[tier]      # only the two tiers that ask for a cause; no key otherwise
