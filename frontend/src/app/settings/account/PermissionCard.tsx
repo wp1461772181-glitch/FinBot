@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { ErrorBar } from "@/components/state/ErrorBar";
 import { notify } from "@/components/state/notify";
 import { Segmented } from "@/components/Segmented";
@@ -22,9 +22,11 @@ export function PermissionCard() {
   const { t } = useLocale();
   const read = useLoad(signal => getPermissionMode(signal));
   const [saving, setSaving] = useState(false);
+  const busy = useRef(false);      // Segmented calls back on both change and click: one press must send one write
   const mode = read.data?.mode ?? null;
   async function choose(next: PermissionMode) {
-    if (next === mode || saving) return;
+    if (next === mode || busy.current) return;
+    busy.current = true;
     setSaving(true);
     try {
       await putPermissionMode(next);
@@ -33,6 +35,7 @@ export function PermissionCard() {
     } catch (error) {
       notify.error(error instanceof Error ? error.message : t("保存失败，请重试。"), { id: "settings:permission" });
     } finally {
+      busy.current = false;
       setSaving(false);
     }
   }
@@ -40,7 +43,7 @@ export function PermissionCard() {
     {read.error != null && <ErrorBar error={read.error} onRetry={() => void read.reload()} retrying={read.loading} />}
     {mode && <>
       <Segmented<PermissionMode> name="settings-permission" testid="permission-choice" legend={<span className="sr-only">{t("权限")}</span>} value={mode}
-        options={[{ value: "ask", label: t("每步都问") }, { value: "default", label: t("默认") }, { value: "full", label: t("完全放行") }]} onChange={(next) => void choose(next)} />
+        options={[{ value: "ask", label: t("每步都问") }, { value: "default", label: t("默认") }, { value: "full", label: t("完全放行") }]} disabled={saving} onChange={(next) => void choose(next)} />
       <p data-testid="permission-what" className="text-small text-ink-2">{t(WHAT[mode])}</p>
     </>}
     <ul data-testid="permission-always" className="m-0 grid list-disc gap-1 pl-5 text-small text-muted-foreground">

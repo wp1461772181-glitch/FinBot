@@ -10095,15 +10095,16 @@ async function permissionModes(ctx) {
   try {
     const { page } = view;
     const writes = () => view.mock.state.permission.writes;
-    const choice = (mode) => page.locator(`[data-testid=permission-choice][data-value=${mode}]`);
-    assert((await page.locator("[data-testid=permission-choice]").count()) === 3, "expected three modes");
-    assert((await choice("default").getAttribute("aria-checked")) === "true", "默认 is not chosen");
+    const choice = (mode) => page.locator(`[data-testid=permission-choice] label[data-option=${mode}]`);
+    const chosen = () => page.locator("[data-testid=permission-choice] input:checked").getAttribute("value");
+    assert((await page.locator("[data-testid=permission-choice] label[data-option]").count()) === 3, "expected three modes");
+    assert((await chosen()) === "default", "默认 is not chosen");
     assert((await page.locator("[data-testid=permission-what]").innerText()).includes("放进确认卡等你点"), "the default line is missing");
     assert((await page.locator("[data-testid=permission-always] li").count()) === 3, "the lines that hold in every mode are missing");
     const wide = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
     assert(wide <= 0, `sideways overflow of ${wide}px at 390`);
     await choice("full").click();
-    await page.waitForFunction(() => document.querySelector("[data-testid=permission-choice][data-value=full]")?.getAttribute("aria-checked") === "true", null, { timeout: 8000 });
+    await page.waitForFunction(() => document.querySelector("[data-testid=permission-choice] input:checked")?.getAttribute("value") === "full", null, { timeout: 8000 });
     assert(writes().length === 1 && JSON.stringify(writes()[0].body) === '{"mode":"full"}', `the write is not the contract's: ${JSON.stringify(writes())}`);
     assert((await page.locator("[data-testid=permission-what]").innerText()).includes("不弹确认卡"), "the full-access line did not replace the default one");
     await choice("full").click();
