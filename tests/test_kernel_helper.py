@@ -34,7 +34,8 @@ GOLDEN = {
     # 5d-3a: act gains rate_answer, and each tier-1 operation's line names its arguments (the system text is unchanged).
     "owner": ("d3bd29a8d17d179a333825a0dc071965d3d965062e701e5519dcfc989958e550",
                "a8939601bb56f0e88c086dbccfe6e622e619b16b8c19b56d48e566b558928303"),
-    "guest": ("cc697baf95543b43614509bb70ea10889ed11ab173f2089dd28e703b49fdaa4d", "a8939601bb56f0e88c086dbccfe6e622e619b16b8c19b56d48e566b558928303"),
+    # 6a: a guest's system prompt gains the line about what only the owner can do (``prompt.GUEST_NOTE``); the owner's is unchanged.
+    "guest": ("cc697baf95543b43614509bb70ea10889ed11ab173f2089dd28e703b49fdaa4d", "e02eb10753903050001bcd7b2958b43b174e6eb5c68cf837ae04753d8b6d3eff"),
 }
 
 

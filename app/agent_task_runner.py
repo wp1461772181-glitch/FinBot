@@ -152,6 +152,8 @@ async def run_unattended_turn(credential: str, question: str, model: dict, *, to
                                          tool_call_id=event["call_id"])
                 elif kind == "delta":
                     answer += event["text"]
+                elif kind == "answer_reset":
+                    answer = ""      # the kernel takes back what it streamed (a step's preamble before a tool call, a cleaned answer)
                 elif kind == "done":
                     done = event
     except Exception as exc:

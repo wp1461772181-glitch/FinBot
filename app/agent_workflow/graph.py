@@ -29,7 +29,7 @@ async def _direct_agent_turn(state: AgentWorkflowState, runtime: Runtime[AgentRu
         kind = event.pop("event")
         try: get_stream_writer()({"event": kind, **event})
         except RuntimeError: pass
-    # The kernel runs only for engine "v2" with the flag on; a scheduled task (unattended) never gets it (stream_workflow).
+    # The kernel runs for engine "v2" with the flag on (``_engine``): every turn, a scheduled one too, unless a switch sends it back.
     if kernel_runs(runtime.context.engine):
         from ..kernel.loop import run_turn as run_kernel_turn
         result = await run_kernel_turn(state.get("question", ""), runtime.context, emit=publish,
@@ -89,12 +89,17 @@ def layers_default_window() -> int:
     return WINDOW_TOKENS
 
 
-def _engine(bot: dict, unattended: bool) -> str | None:
-    """The bot's turn engine; when it has none (or there is no bot), FINBOT_KERNEL_DEFAULT (only the exact value "v2" counts).  A scheduled task never gets one."""
+def _engine(bot: dict, unattended: bool) -> str:
+    """The turn engine: "v2" the kernel, "v1" the old turn.  A bot that names one gets it; a bot that names none, and a turn with no bot,
+    get FINBOT_KERNEL_DEFAULT: only the exact value "v1" keeps the old turn, anything else (unset included) is the kernel.  A scheduled
+    task (unattended) follows the same rule; FINBOT_KERNEL_ROUTINES off sends every scheduled task back to the old turn."""
     import os
-    if unattended:
-        return None
-    return bot.get("engine") or ("v2" if os.environ.get("FINBOT_KERNEL_DEFAULT") == "v2" else None)
+    if unattended and not flag("FINBOT_KERNEL_ROUTINES", True):
+        return "v1"
+    engine = bot.get("engine")
+    if engine in ("v1", "v2"):
+        return engine
+    return "v1" if os.environ.get("FINBOT_KERNEL_DEFAULT") == "v1" else "v2"
 
 
 def kernel_runs(engine: str | None) -> bool:

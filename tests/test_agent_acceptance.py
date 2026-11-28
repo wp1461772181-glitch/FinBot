@@ -25,6 +25,8 @@ SESSION = 'parent-session-' + 'c' * 48
 
 @pytest.fixture(autouse=True)
 def setup(disposable_database, monkeypatch):
+    # The old turn's acceptance tests (stage 6a made the kernel every turn's default): they keep the old turn until it is removed.
+    monkeypatch.setenv('FINBOT_KERNEL_DEFAULT', 'v1')
     Base.metadata.create_all(engine)
     with SessionLocal() as s:
         seed_faq(s)

@@ -125,7 +125,16 @@ def test_bot_with_engine_v2_runs_the_kernel(wiring):
     assert final[1]["tool_calls"]["audit"]["engine"] == "v2"
 
 
-def test_bot_without_engine_runs_the_old_turn(wiring):
+def test_bot_without_engine_runs_the_kernel(wiring):
+    """Stage 6a: a bot that names no engine (a newly made one) gets the server's default, the kernel."""
+    wiring.model([(["好的"], [])])
+    events = wiring.bot_turn()
+    assert done_of(events)["status"] == "succeeded"
+    assert wiring.old_calls == []
+
+
+def test_bot_with_engine_v1_runs_the_old_turn(wiring):
+    wiring.bot["engine"] = "v1"
     wiring.kernel_must_not_run()
     events = wiring.bot_turn()
     assert done_of(events)["status"] in ("complete", "succeeded")
@@ -133,18 +142,28 @@ def test_bot_without_engine_runs_the_old_turn(wiring):
     assert wiring.old_calls
 
 
+def test_env_default_v1_sends_engineless_bots_back_to_the_old_turn(wiring):
+    wiring.monkeypatch.setenv("FINBOT_KERNEL_DEFAULT", "v1")
+    wiring.kernel_must_not_run()
+    assert done_of(wiring.bot_turn())["status"] in ("complete", "succeeded")
+    assert wiring.old_calls
+
+
 def test_env_default_applies_to_non_bot_turns(wiring):
-    wiring.monkeypatch.setenv("FINBOT_KERNEL_DEFAULT", "v2")
-    wiring.model([(["好的"], [])])
-    events = wiring.catalog_turn()
-    assert "".join(d["text"] for n, d in events if n == "delta") == "好的"
-    assert wiring.script.count == 1 and wiring.old_calls == []
-    for value in ("v3", ""):
-        wiring.monkeypatch.setenv("FINBOT_KERNEL_DEFAULT", value)
-        wiring.kernel_must_not_run()
-        wiring.old_calls.clear()
-        assert done_of(wiring.catalog_turn())["status"] in ("complete", "succeeded")
-        assert wiring.old_calls
+    """Unset, "v2" or anything but the exact "v1": a turn with no bot runs the kernel."""
+    for value in (None, "v2", "v3", ""):
+        if value is None:
+            wiring.monkeypatch.delenv("FINBOT_KERNEL_DEFAULT", raising=False)
+        else:
+            wiring.monkeypatch.setenv("FINBOT_KERNEL_DEFAULT", value)
+        wiring.model([(["好的"], [])])
+        events = wiring.catalog_turn()
+        assert "".join(d["text"] for n, d in events if n == "delta") == "好的"
+        assert wiring.script.count == 1 and wiring.old_calls == []
+    wiring.monkeypatch.setenv("FINBOT_KERNEL_DEFAULT", "v1")
+    wiring.kernel_must_not_run()
+    assert done_of(wiring.catalog_turn())["status"] in ("complete", "succeeded")
+    assert wiring.old_calls
 
 
 def test_flag_off_forces_the_old_turn(wiring):
@@ -156,12 +175,8 @@ def test_flag_off_forces_the_old_turn(wiring):
     assert wiring.old_calls
 
 
-def test_unattended_task_never_uses_the_kernel(wiring):
+def _unattended_events(wiring):
     from app.agent_workflow.graph import stream_workflow
-
-    wiring.bot["engine"] = "v2"
-    wiring.monkeypatch.setenv("FINBOT_KERNEL_DEFAULT", "v2")
-    wiring.kernel_must_not_run()
 
     async def run():
         return [event async for event in stream_workflow(
@@ -169,7 +184,22 @@ def test_unattended_task_never_uses_the_kernel(wiring):
             provider="deepseek", model="deepseek-chat", api_key="abcdefgh", base_url=None, owner_hash=str(uuid4()),
             conversation_id=str(uuid4()), turn_id=str(uuid4()), unattended=True, bot=dict(wiring.bot))]
 
-    events = asyncio.run(run())
+    return asyncio.run(run())
+
+
+def test_unattended_task_follows_its_bot_onto_the_kernel(wiring):
+    wiring.bot["engine"] = "v2"
+    wiring.model([(["无新消息"], [])])
+    events = _unattended_events(wiring)
+    assert next(e for e in events if e.get("event") == "done")["audit"]["engine"] == "v2"
+    assert wiring.old_calls == []
+
+
+def test_routines_switch_off_sends_unattended_tasks_to_the_old_turn(wiring):
+    wiring.bot["engine"] = "v2"
+    wiring.monkeypatch.setenv("FINBOT_KERNEL_ROUTINES", "off")
+    wiring.kernel_must_not_run()
+    events = _unattended_events(wiring)
     assert any(e.get("event") == "done" for e in events)
     assert wiring.old_calls
 
@@ -212,7 +242,7 @@ def test_old_turn_runs_on_a_conversation_whose_last_turn_was_the_kernel(wiring):
     wiring.bot["engine"] = "v2"
     wiring.model([(["好的"], [])])
     assert done_of(wiring.bot_turn())["status"] == "succeeded"
-    wiring.bot["engine"] = None
+    wiring.bot["engine"] = "v1"
     wiring.kernel_must_not_run()
     events = wiring.bot_turn()
     assert wiring.old_calls
@@ -227,6 +257,8 @@ def test_engine_validation():
                    is_default=False, template="", daily_notify_cap=0)
     bots._apply(bot, {"engine": "v2"})
     assert bots.serialize(bot)["engine"] == "v2"
+    bots._apply(bot, {"engine": "v1"})
+    assert bots.serialize(bot)["engine"] == "v1"
     bots._apply(bot, {"engine": None})
     assert bots.serialize(bot)["engine"] is None
     with pytest.raises(bots.BotError):
@@ -504,6 +536,8 @@ def test_a_kernel_turn_asks_for_the_anchored_history(wiring):
 
 
 def test_an_old_engine_turn_asks_for_the_plain_history(wiring):
+    wiring.bot["engine"] = "v1"
+    wiring.monkeypatch.setenv("FINBOT_KERNEL_DEFAULT", "v1")
     seen = record_context_calls(wiring)
     wiring.bot_turn()
     wiring.catalog_turn()
@@ -519,10 +553,10 @@ def test_the_kernel_flag_off_means_the_plain_history(wiring):
 
 
 def test_a_turn_without_a_bot_follows_the_environment_default(wiring):
+    wiring.model([(["好"], []), (["好"], [])])
     seen = record_context_calls(wiring)
-    wiring.monkeypatch.setenv("FINBOT_KERNEL_DEFAULT", "v2")
     wiring.catalog_turn()
-    wiring.monkeypatch.delenv("FINBOT_KERNEL_DEFAULT")
+    wiring.monkeypatch.setenv("FINBOT_KERNEL_DEFAULT", "v1")
     wiring.catalog_turn()
     assert seen == [True, False]
 

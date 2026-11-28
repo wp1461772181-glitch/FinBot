@@ -841,6 +841,11 @@ UNDO = {
     "rate_alert": "说错了就说『那条改成有用／没用』。",
     "rate_answer": "说错了就说『那条改成好的／不好』；网页上那条回答下的按钮也能改。",
 }
+UNATTENDED_OWN_WORDS = ("这是无人值守的定时运行：改他的记忆和看法、持仓和资金、定时任务、技能、bot 和各项设置的操作，只凭他自己在对话里说，"
+                        "不由定时运行建议。在回答里写出你的看法，由他决定要不要去对话里提。")
+INBOX_NOTE = "已放进他的收件箱「待你确认」，这一轮不会执行，由他以后决定。现在用一两句话说明你建议了什么、为什么，不要说已经做了。"
+UNATTENDED_PICKS = ("这是无人值守的定时运行：要他在卡片上勾选材料的操作（修订预测）放不进收件箱。"
+                    "在回答里说明你建议修订、依据是哪些新材料，由他在对话里提出。")
 AWAITING_NOTE = "已放进确认卡。回答结束时卡片会交给用户，用户点了确认才执行。现在用一两句话告诉用户你准备做什么、请他核对卡片，不要说已经做了。"
 
 
@@ -1003,6 +1008,11 @@ async def _handle(run, name, args: dict) -> tuple[dict, str]:
             if info["pages"]:                 # page titles are text from outside: from here on nothing in this turn runs at once
                 run.read_results = getattr(run, "read_results", 0) + 1
         return {"ok": True, "data": [info]}, "lookup"
+    if getattr(context, "unattended", False) and name not in unattended_suggestions():
+        # The old turn's rule (``grants.suggestion_operation``): his profile, his positions, his routines and skills change only on his
+        # own words, and a scheduled run's suggestion is not one.  What it may suggest: the research queue, a filing to review, and the
+        # third tier (fetching, importing, analysing, forecasting), all of which he still confirms in the inbox.
+        return _failure("unattended_own_words_only", hint=UNATTENDED_OWN_WORDS), "refused:unattended_own_words_only"
     prepared = await prepare(run, name, args["arguments"])
     if isinstance(prepared, dict):
         status = ((prepared.get("data") or [{}])[0] or {}).get("status")
@@ -1011,6 +1021,20 @@ async def _handle(run, name, args: dict) -> tuple[dict, str]:
     # page or filing could be asking the model to remember something, so the operation goes onto the card like tier 2.
     # With memory writes on, after a read only a guess (``remember`` with basis noticed: stored unconfirmed, light use, he can reject it) still runs at once.
     # A said ``remember`` (his quote proves nothing about the text next to it), record_view, forget, drop_view, rate_alert, rate_answer and the research queue go on the card.
+    if getattr(context, "unattended", False):
+        # A scheduled run: nobody is watching, so nothing runs at once, whatever its tier; each proposal goes to his inbox (the loop's
+        # ``_mint_card``), as the old turn's scheduled runs did.  A proposal whose card asks him to pick (a revision's materials) cannot.
+        if prepared.options is not None:
+            return _failure("unattended_needs_owner", hint=UNATTENDED_PICKS), "refused:unattended_needs_owner"
+        result, outcome = _collect(run, prepared)
+        if outcome == "proposed":
+            result = {"ok": True, "data": [{"status": "queued_for_owner_review", "title": prepared.display["title"], "note": INBOX_NOTE}]}
+        return result, outcome
     if prepared.tier == 1 and (not run.read_results or _direct_after_reads(run, prepared)):
         return await _run_at_once(run, prepared)
     return _collect(run, prepared)
+
+
+def unattended_suggestions() -> frozenset:
+    """The operations a scheduled run may put in his inbox: the research queue, a filing to review, and every third-tier operation."""
+    return frozenset({"add_to_research_queue", "remove_from_research_queue", "review_filing", *(n for n in OPERATIONS if tier_of(n) == 3)})

@@ -8,6 +8,7 @@ gate before the answer.
 from __future__ import annotations
 
 import asyncio
+import copy
 import logging
 import time
 from dataclasses import dataclass, field
@@ -24,7 +25,7 @@ from ..agent_context import is_catalogue_message, is_memory_message
 from ..agent_tool_catalog import schemas
 from ..agent_workflow import consent
 from ..agent_workflow.evidence import strip_invalid_markers
-from . import act, ask, decide, helper, press, progress, prompt, skills, tiers
+from . import act, ask, decide, helper, notify, press, progress, prompt, skills, tiers
 from . import inbox as inboxes
 from .toolrun import mark_timeline, number_attached, run_step_tools
 
@@ -115,13 +116,18 @@ class _Run:
 
 def _tool_schemas(context) -> list[dict]:
     owner = owner_credential_matches(getattr(context, "identity_credential", ""))
-    # search_x costs the owner money per post and needs his token: it is offered only where the server has one.
-    available = schemas(owner=owner, kernel=True, names=[n for n in READ_TOOLS if n != "search_x" or x_search.configured()])
+    unattended = bool(getattr(context, "unattended", False))
+    # search_x costs the owner money per post and needs his token: it is offered only where the server has one, and a scheduled run
+    # (nobody watching) does not spend it, as the old turn's scheduled runs did not.
+    available = schemas(owner=owner, kernel=True, names=[n for n in READ_TOOLS if n != "search_x" or (x_search.configured() and not unattended)])
     scope = getattr(context, "tool_scope", None)
     # The kernel's own tools go last whatever the ceiling is, so the list is the same for the whole turn.
     # A skill is offered to an owner who has any enabled (the endpoint puts their list on the context); a bot's scope does not take it away.
+    # A scheduled run has nobody to ask and no messages arriving, so no ``ask`` and no ``handle_message``; its ``act`` puts what it
+    # proposes in the owner's inbox (``_mint_card``), and it may send him a message (``notify_telegram``) when its instruction says so.
     offered = [*(s for s in available if scope is None or s["function"]["name"] in scope), *([act.ACT_SCHEMA] if owner else []),
-               ask.ASK_SCHEMA, *([skills.USE_SKILL_SCHEMA] if owner and getattr(context, "skill_block", None) else []),
+               *([notify.schema()] if owner and unattended else []), *([] if unattended else [ask.ASK_SCHEMA]),
+               *([skills.USE_SKILL_SCHEMA] if owner and getattr(context, "skill_block", None) else []),
                progress.PLAN_SCHEMA, tiers.ESCALATE_SCHEMA, *([inboxes.HANDLE_SCHEMA] if getattr(context, "inbox", None) is not None else [])]
     if helper.offered(s["function"]["name"] for s in offered):      # behind the switch, after everything else: the list is unchanged with it off
         offered.append(helper.DELEGATE_SCHEMA)
@@ -332,12 +338,35 @@ def _card_display(proposals: list) -> dict:
     return display
 
 
+SUGGESTION_TITLE = "这是 Agent 的建议，不是你的要求："      # the old turn's words for a scheduled run's suggestion in the inbox
+NO_INBOX = "（这是无人值守的运行，提出的操作没有地方放，没有保存。）"
+
+
+def _to_inbox(run: _Run) -> str:
+    """A scheduled run's proposals: nobody is here to press a card (and a card lives ten minutes), so they go to the owner's inbox
+    (待你确认) through the runner's ``action_sink``, as one item holding them all, the way a live turn puts them on one card; he makes
+    the card there later (``agent_tasks.mint_card``) and presses it.  One item, not one per proposal: a conversation holds one card at a
+    time, so separate items would make each other's cards stale."""
+    sink = getattr(run.context, "action_sink", None)
+    if sink is None:
+        return NO_INBOX
+    display = copy.deepcopy(_card_display(run.proposals))
+    display["title"] = SUGGESTION_TITLE + str(display.get("title") or run.proposals[0].operation["name"])
+    display["agent_suggestion"] = True
+    operations = [copy.deepcopy(p.operation) for p in run.proposals]
+    sink.append({"operation": operations[0], "operations": operations, "display": display, "question": run.question})
+    run.audit["write_outcome"] = "queued_for_owner"
+    return ""
+
+
 async def _mint_card(run: _Run) -> str:
     """Put the turn's proposals on one card.  Returns a sentence to append to the answer when the card could not be made."""
     proposals = run.proposals
     if not proposals:
         return ""
     context = run.context
+    if getattr(context, "unattended", False):
+        return _to_inbox(run)
     if inboxes.other_card_since(context.conversation_id, run.turn_id, run.started):
         return f"（确认卡没有生成：{ask.WRITE_CARD_WAITING} 请先处理那张卡片，再重新提出这项操作。）"
     variants = [("保存并启用", None), ("存为草稿", "draft")] if all(p.operation["name"] == "save_skill" for p in proposals) else None

@@ -542,7 +542,7 @@ def test_a_separate_turn_still_starts_when_the_request_that_brought_it_is_droppe
 
 def test_old_engine_turns_keep_the_409_while_the_conversation_is_busy(lab):
     from fastapi import HTTPException
-    lab.w.bot["engine"] = None
+    lab.w.bot["engine"] = "v1"
     lab.monkeypatch.delenv("FINBOT_KERNEL_DEFAULT")
     lock = asyncio.Lock()
 

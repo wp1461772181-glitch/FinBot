@@ -21,7 +21,7 @@ from datetime import date
 from .. import agent_model_roles as roles
 from .. import model_usage
 from ..agent_workflow import tools
-from . import act, ask, decide, progress, skills, tiers
+from . import act, ask, decide, notify, progress, skills, tiers
 from . import inbox as inboxes
 
 DELEGATE = "delegate"
@@ -33,8 +33,8 @@ MAX_HELPERS = 3            # ``delegate`` calls run in one step of a turn
 BRIEF_MAX = 4000
 FAILED_HINT = "小助手没有做成，可以自己查。"
 NARRATION_PREFIX = "小助手："
-# The kernel's own tools: none of them is the helper's (it reads, calculates and reports; it writes, asks and delegates nothing).
-OWN_TOOLS = frozenset({act.ACT, ask.ASK, skills.USE_SKILL, progress.PLAN, tiers.ESCALATE, decide.DECIDE, DELEGATE, inboxes.HANDLE})
+# The kernel's own tools: none of them is the helper's (it reads, calculates and reports; it writes, asks, notifies and delegates nothing).
+OWN_TOOLS = frozenset({act.ACT, ask.ASK, skills.USE_SKILL, progress.PLAN, tiers.ESCALATE, decide.DECIDE, DELEGATE, inboxes.HANDLE, notify.NOTIFY})
 _CALCULATIONS = frozenset({"calculate", "calculate_formula"})
 _ORDINAL = re.compile(r"\[(\d+)\]")
 logger = logging.getLogger(__name__)

@@ -21,7 +21,7 @@ from ..agent_tool_catalog import definitions, validate
 from ..agent_workflow import tools
 from ..agent_workflow.evidence import number_rows
 from .. import source_authority
-from . import act, ask, decide, helper, progress, skills, tiers
+from . import act, ask, decide, helper, notify, progress, skills, tiers
 from . import inbox as inboxes
 
 MAX_PARALLEL = 4
@@ -324,6 +324,14 @@ async def _settle_act(run, item: _Call) -> None:
         item.result = tools.error("tool_failed")
 
 
+async def _settle_notify(run, item: _Call) -> None:
+    try:
+        item.result = await notify.settle(run, item.args)
+    except Exception:
+        logger.exception("kernel notify_telegram failed")
+        item.result = tools.error("tool_failed")
+
+
 async def _settle_skill(run, item: _Call) -> None:
     """One ``use_skill`` call: the owner's saved text, read from the database; it is not evidence and not a read."""
     try:
@@ -411,7 +419,15 @@ async def run_step_tools(run, calls: list[dict]) -> list[dict]:
         elif item.name in (tiers.ESCALATE, progress.PLAN):
             own.append(item)          # the kernel's own tools: never go through tools.invoke, make no citation
         elif item.name == ask.ASK:
-            asks.append(item)         # also its own, but settled after the reads of its step: the model has seen what they found
+            if item.name in run.tool_names:
+                asks.append(item)     # also its own, but settled after the reads of its step: the model has seen what they found
+            else:
+                item.result = tools.error("tool_not_in_bot_scope")      # a scheduled run has nobody to ask
+        elif item.name == notify.NOTIFY:
+            if item.name in run.tool_names:
+                serial.append(item)   # a scheduled run's message to the owner: after the reads, so it can cite what they found
+            else:
+                item.result = tools.error("tool_not_in_bot_scope")
         elif item.name == act.ACT:
             serial.append(item)       # the kernel's own, but it can take time and may rest on this step's reads: with the calculations
         elif item.name == skills.USE_SKILL:
@@ -474,6 +490,8 @@ async def run_step_tools(run, calls: list[dict]) -> list[dict]:
     for item in serial:
         if item.name == act.ACT:
             await _settle_act(run, item)
+        elif item.name == notify.NOTIFY:
+            await _settle_notify(run, item)
         elif item.name == skills.USE_SKILL:
             await _settle_skill(run, item)
         else:
