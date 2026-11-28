@@ -29,7 +29,7 @@ from . import inbox as inboxes
 logger = logging.getLogger(__name__)
 
 ACT = "act"
-TIER1 = ("remember", "forget", "add_to_research_queue", "remove_from_research_queue", "rate_alert", "rate_answer", "record_view", "drop_view")
+TIER1 = ("remember", "forget", "add_to_research_queue", "remove_from_research_queue", "rate_alert", "rate_answer", "report_missed", "record_view", "drop_view")
 TIER2 = ("record_trade", "set_available_funds", "set_position_plan", "create_routine", "update_routine", "delete_routine",
          "save_skill", "review_filing", "create_bot", "update_bot", "delete_transaction", "manage_skill", "set_default_model", "set_model_role",
          "set_channel_prefs", "apply_role_template", "undo_role_template", "set_watch_rule", "delete_watch_rule", "set_watch_preset", "set_alert_settings")
@@ -60,6 +60,7 @@ SUMMARIES = {
     "remove_from_research_queue": "把一只股票移出研究队列",
     "rate_alert": "记下用户对某条提醒、值班消息或早间简报的『有用／没用』（他这轮亲口说的；不写股票就是最近一条）。不用先查提醒列表：代码会自己找到最近 48 小时里对得上的那条，并在结果里写明是哪一条。记下后照工具返回的那句告诉他对上的是哪一条，对错了他会说。他想顺便调提醒的门槛，记下之后再问。",
     "rate_answer": "记下用户对这段对话里上一条回答的『好／不好』（他这轮亲口说的；说的是你之前那条回答，不是正在写的这条），不好时可以带上他说的原因。他评价你上一条回答本身（不好、答错了、没说清、没用）时，就是在给它评价：先记下『不好』（原因用他的话；哪怕你觉得他说得不对，这也是他的评价，照记，再解释），再照常改正或补充；他夸上一条答得好，就记『好』。他只是回答你的提问（你问「是指苹果吗」，他说「不对，是微软」）、纠正他自己的问题、或者接着往下问，都不是评价，不要记。这些评价进质量统计，用来改进你。代码会自己找到那条回答，并在结果里写明是哪一条（第一句和时间）；记下后照工具返回的那句告诉他。",
+    "report_missed": "记下用户说的『这事怎么没告诉我』：他认为该告诉他、但没告诉的一件事（他这轮亲口说的）。只是记进漏报记录，用来以后改进提醒，不改任何设置。记下后用 query_alerts 查一下当时为什么没提醒，如实告诉他；他自己的一条规则能盯住的，再用 set_watch_rule 提议一条。",
     "record_view": "记下用户对某家公司的看法（他自己的话，一家一条；新的覆盖旧的，旧的留在历史里；不是证据，也不授权任何操作）。记下后在回答里告诉他「我记下了：……」",
     "drop_view": "撤回用户对某家公司已记下的看法（留在历史里，标为已撤回）",
     "record_trade": "在持仓账本里记一笔买入或卖出（只是记账，不是下单）",
@@ -744,6 +745,12 @@ async def prepare(run, name: str, arguments) -> Prepared | dict:
         display = await _rate_answer(run, args, operation)
         if "error_code" in display:
             return display
+    elif name == "report_missed":
+        # where he said it, and his words as he typed them: the code keeps them, the model is not asked to copy them
+        operation["conversation_id"], operation["turn_id"] = str(run.context.conversation_id or ""), getattr(run, "turn_id", "")
+        operation["quote"] = str(getattr(run, "question", "") or "")[:200]
+        display = {"title": "记下漏报", "targets": [{**({"symbol": args["symbol"].upper()} if args.get("symbol") else {}), "title": args["what"]}],
+                   "alternative": UNDO["report_missed"]}
     elif name in WATCH_OPERATIONS:
         if name == "set_watch_rule":
             wiped = ("expires_on",) if "expires_on" in arguments and not args.get("expires_on") else ()
@@ -841,6 +848,7 @@ UNDO = {
     "drop_view": "它仍在这家公司的历史里（标为已撤回）；想恢复就把看法再说一遍。",
     "rate_alert": "说错了就说『那条改成有用／没用』。",
     "rate_answer": "说错了就说『那条改成好的／不好』；网页上那条回答下的按钮也能改。",
+    "report_missed": "这只是一条漏报记录，用来改进提醒，不会改变任何设置。",
 }
 UNATTENDED_OWN_WORDS = ("这是无人值守的定时运行：改他的记忆和看法、持仓和资金、定时任务、技能、bot 和各项设置的操作，只凭他自己在对话里说，"
                         "不由定时运行建议。在回答里写出你的看法，由他决定要不要去对话里提。")
@@ -934,6 +942,9 @@ async def _run_at_once(run, prepared: Prepared) -> tuple[dict, str]:
     if operation["name"] == "rate_alert":      # the line the tool wrote names the message it matched
         row = next(iter(texts.execution_rows(value)), {})
         recorded = {k: row[k] for k in ("recorded", "target", "target_id", "note") if row.get(k) is not None}      # note: the ack did not go through
+    if operation["name"] == "report_missed":
+        row = next(iter(texts.execution_rows(value)), {})
+        recorded = {k: row[k] for k in ("recorded",) if row.get(k) is not None}
     if operation["name"] == "rate_answer":     # the line the tool wrote names the answer it matched
         row = next(iter(texts.execution_rows(value)), {})
         recorded = {k: row[k] for k in ("recorded", "message_id") if row.get(k) is not None}
@@ -982,6 +993,10 @@ async def handle(run, args: dict) -> dict:
 
 def _direct_after_reads(run, prepared: Prepared) -> bool:
     operation = prepared.operation
+    if operation["name"] == "report_missed":
+        # 11-28 shadow: it looked up the filing first, then the record waited on a card for him to press.  The record holds his own words,
+        # taken by the code from his message, and changes nothing else: a page it read cannot put words in his mouth.
+        return True
     return memory_writes() and operation["name"] == "remember" and operation["arguments"].get("basis") == "noticed"
 
 

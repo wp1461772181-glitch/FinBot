@@ -111,4 +111,4 @@ def test_the_memory_page_added_two_view_writes_and_nothing_else_that_changes_dat
                     ("POST", "/agent-chat/views/{view_id}/restore")]
     assert OPERATION_REGISTRY[("POST", "/agent-chat/views/{symbol}")] == {"operation": "record_view"}
     assert OPERATION_REGISTRY[("POST", "/agent-chat/views/{symbol}/drop")] == {"operation": "drop_view"}
-    assert not KERNEL_ONLY_OPERATIONS
+    assert KERNEL_ONLY_OPERATIONS == {"report_missed"}       # 11-28: said in a conversation only, no page
