@@ -337,6 +337,8 @@ async def _remember(run, args: dict, operation: dict) -> dict:
         return _failure("quote_not_owners", reason=REMEMBER_HINTS["quote_not_owners"], hint=REMEMBER_HINTS["quote_not_owners"])
     if noticed:
         run.noticed_count = getattr(run, "noticed_count", 0) + 1
+        if args.get("kind") == "recent" and getattr(run, "read_results", 0):
+            operation["held"] = True       # after outside material a 近况 waits for him like any guess (11-28 security review)
     return await _remember_write(run, args, operation, quote, noticed=noticed)
 
 
@@ -999,7 +1001,7 @@ async def _run_at_once_now(run, prepared: Prepared) -> tuple[dict, str]:
         return {"ok": False, "data": [{**facts, **reason, "status": "failed", "title": title}]}, f"failed:{code}"
     undo = UNDO.get(operation["name"], UNDO_OTHER).replace("{company}", owner_views.display_name(operation["arguments"].get("symbol") or ""))
     if operation["name"] == "remember" and operation["arguments"].get("basis") == "noticed":
-        undo = RECENT_NOTE if operation["arguments"].get("kind") == "recent" else NOTICED_NOTE
+        undo = RECENT_NOTE if operation["arguments"].get("kind") == "recent" and not operation.get("held") else NOTICED_NOTE
     recorded = {"recorded": operation["arguments"]["text"]} if operation["name"] == "record_view" else {}
     if operation["name"] == "rate_alert":      # the line the tool wrote names the message it matched
         row = next(iter(texts.execution_rows(value)), {})

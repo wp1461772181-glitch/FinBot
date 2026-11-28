@@ -704,7 +704,7 @@ def add_proposed(owner_hash: str, *, kind: str, text: str, examples: list[dict],
 
 
 def add_noticed(owner_hash: str, *, kind: str, text: str, quote: str, bot_id: str | None = None, message_id: str | None = None,
-                now: datetime | None = None, by: memory_events.Actor | None = None) -> dict:
+                now: datetime | None = None, by: memory_events.Actor | None = None, held: bool = False) -> dict:
     """The kernel model wrote a guess on the spot (``remember`` with basis noticed): origin pattern, status proposed, in the turn's layer
     (``bot_id`` None: global), the quote it saw as its one example, no review run.  The caller has checked the quote against his words.
     Returns {status: added, item} or {status: duplicate | rejected} (nothing written: the same text is here, or he rejected it before).
@@ -714,7 +714,8 @@ def add_noticed(owner_hash: str, *, kind: str, text: str, quote: str, bot_id: st
     if kind not in KINDS or not text or len(text) > TEXT_MAX_CHARS or len(quote) > TEXT_MAX_CHARS or not quote:
         raise ProfileError("invalid_proposal")
     now = now or datetime.now(UTC)
-    if kind == "recent":
+    if kind == "recent" and not held:
+        # ``held``: the turn had read outside material (11-28 security review): then a 近况 waits for him as any guess does, below.
         return _add_recent(owner_hash, text=text, quote=quote, bot_id=bot_id, message_id=message_id, now=now, by=by)
     with SessionLocal() as db:
         _lock(db, owner_hash)
@@ -748,6 +749,9 @@ def _add_recent(owner_hash: str, *, text: str, quote: str, bot_id, message_id, n
     with SessionLocal() as db:
         _lock(db, owner_hash)
         layer = _bot(db, owner_hash, bot_id)
+        rejected = set(db.scalars(select(AgentProfileItem.text).where(AgentProfileItem.owner_hash == owner_hash, AgentProfileItem.status == "rejected")))
+        if fingerprint(text) in rejected:      # he said it was wrong before: as on the guess path, it is not written again
+            return {"status": "rejected"}
         rows = [r for r in _active(db, owner_hash) if r.kind == "recent"]
         same = next((r for r in rows if _plain(r.text) == _plain(text)), None)
         if same is not None:

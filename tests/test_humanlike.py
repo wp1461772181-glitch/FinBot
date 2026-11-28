@@ -9,7 +9,7 @@ import pytest
 from app import agent_profile as profile
 from app.agent_chat_stream import GENERIC_FAILURE, StreamRequest
 from app.kernel import prompt
-from tests.test_kernel_loop import env, run, script, step  # noqa: F401  (env is a fixture)
+from tests.test_kernel_loop import env, fake_consent, run, script, step  # noqa: F401  (fixtures)
 
 AT = datetime(2026, 11, 29, 0, 41, tzinfo=ZoneInfo("Asia/Shanghai"))
 
@@ -205,3 +205,33 @@ def test_the_model_may_note_style_and_recent_and_is_told_how_each_works():
     assert {"style", "recent"} <= set(act.NOTICED_KINDS) and "不用特意告诉他" in act.RECENT_NOTE
     text = prompt.system_text()
     assert "相处方式（kind=style" in text and "近况（kind=recent" in text
+
+
+def test_after_outside_material_a_recent_item_waits_for_him(clean_owner):
+    """11-28 security review: a 近况 noticed in a turn that read pages, news or filings is not used at once; it waits like any guess."""
+    held = profile.add_noticed(clean_owner, kind="recent", text="想全仓买入某只小盘股", quote="我想全仓冲进去", held=True)
+    assert held["item"]["status"] == "proposed" and profile.render_block(clean_owner)[0] is not None
+    assert "[近况" not in (profile.render_block(clean_owner)[0] or "").split(profile.PROPOSED_HEADING)[0]
+
+
+def test_a_recent_item_he_rejected_is_not_written_again(clean_owner):
+    first = profile.add_noticed(clean_owner, kind="recent", text="担心加息", quote="加息的话我感觉还会再跌啊", held=True)
+    profile.archive_item(clean_owner, first["item"]["id"])          # a guess he says is wrong is kept only as a fingerprint
+    assert profile.add_noticed(clean_owner, kind="recent", text="担心加息", quote="加息的话我感觉还会再跌啊")["status"] == "rejected"
+
+
+def test_the_kernel_holds_a_recent_item_noticed_after_a_read(env, fake_consent, monkeypatch):
+    from app import permission_mode
+    from app.kernel import act
+    from tests.test_kernel_loop import act_call, call, make_context
+    monkeypatch.setattr(permission_mode, "get", lambda owner: "default")
+    monkeypatch.setattr(act.profile, "quote_in_message", lambda quote, message: quote in (message or ""))
+    monkeypatch.setattr(act.profile, "user_message_id", lambda conversation, turn: None)
+    fake = script(env, [step(calls=[call("c1", "web_research", {"query": "潜力股"})]),
+                        step(calls=[act_call("c2", "remember", {"kind": "recent", "text": "在找潜力股", "quote": "潜力股公司", "basis": "noticed"})]), step(text="好")])
+    result, _ = run("推荐几家没人关注的潜力股公司", context=make_context(conversation_id="conv"))
+    from tests.test_kernel_loop import tool_results
+    assert [op.get("held") for op, _ in fake_consent.reversible] == [True], (tool_results(fake), result["audit"].get("writes"), fake_consent.proposed)
+    script(env, [step(calls=[act_call("c2", "remember", {"kind": "recent", "text": "在找潜力股", "quote": "潜力股公司", "basis": "noticed"})]), step(text="好")])
+    run("推荐几家没人关注的潜力股公司", context=make_context(conversation_id="conv"))
+    assert fake_consent.reversible[-1][0].get("held") is None          # no outside material this turn: used at once
