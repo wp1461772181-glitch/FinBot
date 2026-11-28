@@ -322,6 +322,10 @@ def _lookup_tier_now(run: _Run) -> str | None:
     lookup = tiers.lookup_tier()
     if lookup is None or run.is_helper or TIERS_INDEX[lookup] >= TIERS_INDEX[run.tier]:
         return None
+    if run.audit.get("lookup_redone"):
+        # One dropped try says the lookup tier misjudges this turn (it wanted to conclude while the turn's tier went on looking):
+        # the rest of the turn runs at its own tier.  Shadow 11-28: a deep-research turn dropped five tries, 185 s of answers nobody saw.
+        return None
     if not run.messages or run.messages[-1].get("role") != "tool":
         return None
     for message in reversed(run.messages):

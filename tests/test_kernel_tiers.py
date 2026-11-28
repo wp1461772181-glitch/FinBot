@@ -199,3 +199,15 @@ def test_a_streaming_try_that_starts_writing_is_cut_and_redone(env):
     assert _efforts(fake) == ["low", "high", "low", "high"] and result["answer"] == "正式回答"
     assert result["audit"]["calls"][2]["kept"] is False and result["audit"]["calls"][2].get("cut") is True
     assert "结论" not in "".join(e.get("text", "") for e in events if e.get("event") == "delta")
+
+
+def test_after_one_dropped_try_the_turn_stops_trying_the_lookup_tier(env):
+    env.monkeypatch.delenv("FINBOT_KERNEL_LOOKUP_TIER", raising=False)
+    fake = script(env, [step(calls=[call("c1", "escalate", {"depth": "high"})]),
+                        step(calls=[call("c2", "query_financials", {"symbol": "AAPL"})]),
+                        step(text="草稿"),                                                       # a try that wants to write: dropped
+                        step(calls=[call("c3", "query_stock_prices", {"symbol": "AAPL"})]),     # the turn's tier looks further
+                        step(text="正式回答")])                                                  # no second try after the drop
+    result, _ = run(context=make_context())
+    assert _efforts(fake) == ["low", "high", "low", "high", "high"] and result["answer"] == "正式回答"
+    assert result["audit"]["lookup_redone"] == 1 and "lookup_steps" not in result["audit"]
