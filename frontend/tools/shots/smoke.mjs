@@ -5568,7 +5568,7 @@ async function botSettingsKeyboard(ctx) {
     let hops = 0;
     for (; hops < 120; hops += 1) { await page.keyboard.press("Tab"); if ((await focused()).id === "bot-name") break; }
     assert(hops < 120, "the name field can not be reached with Tab");
-    await page.keyboard.press("Control+a");
+    await page.keyboard.press("ControlOrMeta+a");
     await page.keyboard.type("键盘改的名");
     await saveBar(page).waitFor({ timeout: 5000 });
     let steps = 0;
@@ -8454,7 +8454,7 @@ async function portfolioKeyboard(ctx) {
     assert((await active()).expanded === "true" && (await active()).id === "pf-toggle", "Enter did not open the row (focus stays on its button)");
     await tabTo((a) => a.id === "pf-plan-text", "the plan text");
     await page.keyboard.press("End"); await page.keyboard.type(" 键盘加的一句");
-    await tabTo((a) => a.id === "pf-add_price", "the 补仓价"); await page.keyboard.press("Control+a"); await page.keyboard.type("199.5");
+    await tabTo((a) => a.id === "pf-add_price", "the 补仓价"); await page.keyboard.press("ControlOrMeta+a"); await page.keyboard.type("199.5");
     const save = await tabTo((a) => a.id === "pf-plan-save", "保存计划 (it is on after the change)");
     assert(save.id === "pf-plan-save", "not on the save key");
     await page.keyboard.press("Enter");
@@ -9231,7 +9231,7 @@ async function routinesKeyboard(ctx) {
     assert((await page.locator('[data-slot="drawer-overlay"]').count()) === 1, "the drawer has no overlay");
     // from the name, only the keyboard: type, go to 内容, save
     await page.locator("[data-step-button=basics]").focus(); await page.keyboard.press("Enter");
-    await page.locator("#task-name").focus(); await page.keyboard.press("Control+a"); await page.keyboard.type("键盘改的名字");
+    await page.locator("#task-name").focus(); await page.keyboard.press("ControlOrMeta+a"); await page.keyboard.type("键盘改的名字");
     await page.locator("[data-step-button=content]").focus(); await page.keyboard.press("Enter");
     await page.locator("[data-testid=task-section-content]").waitFor({ timeout: 5000 });
     await page.locator("[data-testid=task-submit]").focus(); await page.keyboard.press("Enter");

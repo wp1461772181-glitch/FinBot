@@ -413,7 +413,7 @@
      {
       "method": "PATCH",
       "path": "/agent-chat/model-catalog/deepseek-flash",
-      "body": "{\"display_name\":\"DeepSeek Flash\",\"provider\":\"siliconflow\",\"model\":\"deepseek-ai/DeepSeek-V4-Flash\",\"base_url\":null,\"name\":\"deepseek-flash\"}",
+      "body": "{\"display_name\":\"DeepSeek Flash\",\"provider\":\"siliconflow\",\"model\":\"deepseek-ai/DeepSeek-V4-Flash\",\"base_url\":null,\"price_input\":null,\"price_output\":null,\"price_cache_read\":null,\"price_cache_write\":null,\"name\":\"deepseek-flash\"}",
       "hasSession": true
      },
      {
@@ -505,7 +505,7 @@
      {
       "method": "PATCH",
       "path": "/agent-chat/model-catalog/muse-ember",
-      "body": "{\"display_name\":\"Muse Ember\",\"provider\":\"openrouter\",\"model\":\"muse/ember\",\"base_url\":null,\"name\":\"muse-ember-2\"}",
+      "body": "{\"display_name\":\"Muse Ember\",\"provider\":\"openrouter\",\"model\":\"muse/ember\",\"base_url\":null,\"price_input\":null,\"price_output\":null,\"price_cache_read\":null,\"price_cache_write\":null,\"name\":\"muse-ember-2\"}",
       "hasSession": true
      },
      {
@@ -596,7 +596,7 @@
      {
       "method": "PATCH",
       "path": "/agent-chat/model-catalog/glm5.3-flash",
-      "body": "{\"display_name\":\"GLM 5.3 Flash\",\"provider\":\"zhipu\",\"model\":\"glm-5.3-flash\",\"base_url\":null,\"api_key\":\"fake-key-for-smoke-02\",\"name\":\"glm5.3-flash\"}",
+      "body": "{\"display_name\":\"GLM 5.3 Flash\",\"provider\":\"zhipu\",\"model\":\"glm-5.3-flash\",\"base_url\":null,\"api_key\":\"fake-key-for-smoke-02\",\"price_input\":null,\"price_output\":null,\"price_cache_read\":null,\"price_cache_write\":null,\"name\":\"glm5.3-flash\"}",
       "hasSession": true
      },
      {
@@ -688,7 +688,7 @@
      {
       "method": "PATCH",
       "path": "/agent-chat/model-catalog/deepseek-flash",
-      "body": "{\"display_name\":\"DeepSeek Flash\",\"provider\":\"openrouter\",\"model\":\"vendor/moved\",\"base_url\":\"https://openrouter.ai/api/v1\",\"api_key\":\"fake-key-for-smoke-02\",\"name\":\"deepseek-flash\"}",
+      "body": "{\"display_name\":\"DeepSeek Flash\",\"provider\":\"openrouter\",\"model\":\"vendor/moved\",\"base_url\":\"https://openrouter.ai/api/v1\",\"api_key\":\"fake-key-for-smoke-02\",\"price_input\":null,\"price_output\":null,\"price_cache_read\":null,\"price_cache_write\":null,\"name\":\"deepseek-flash\"}",
       "hasSession": true
      },
      {
@@ -779,7 +779,7 @@
      {
       "method": "PATCH",
       "path": "/agent-chat/model-catalog/gpt-6.1-terra",
-      "body": "{\"display_name\":\"GPT Terra（改名）\",\"provider\":\"openrouter\",\"model\":\"openai/gpt-6.1-terra\",\"base_url\":null,\"is_default\":true,\"name\":\"gpt-6.1-terra\"}",
+      "body": "{\"display_name\":\"GPT Terra（改名）\",\"provider\":\"openrouter\",\"model\":\"openai/gpt-6.1-terra\",\"base_url\":null,\"is_default\":true,\"price_input\":null,\"price_output\":null,\"price_cache_read\":null,\"price_cache_write\":null,\"name\":\"gpt-6.1-terra\"}",
       "hasSession": true
      },
      {
