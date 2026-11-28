@@ -66,6 +66,8 @@ export const TOOL_LABELS = {
   rate_alert: "记下提醒反馈",
   rate_answer: "记下回答反馈",
   report_missed: "记下漏报",
+  follow_up: "记下要回头看的事",
+  cancel_follow_up: "取消回头看",
   create_bot: "新建 bot",
   update_bot: "修改 bot",
   delete_transaction: "删除持仓记录",

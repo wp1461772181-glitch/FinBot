@@ -470,7 +470,8 @@ def _replace_topic(db, owner_hash: str, row: AgentProfileItem, by=None) -> None:
 
 def update_item(owner_hash: str, item_id: str, fields: dict, by: memory_events.Actor | None = None) -> dict | None:
     """The owner edits an item on the memory page: its text and/or its layer (``bot_id`` None: global, or
-    any of the owner's bots).  The quote stays the owner's original words.  None when it is not theirs."""
+    any of the owner's bots).  An edited text becomes the quote too: what he typed is his word now (the edit event keeps the old text).
+    None when it is not theirs."""
     with SessionLocal() as db:
         _lock(db, owner_hash)
         row = _owned(db, owner_hash, item_id)
