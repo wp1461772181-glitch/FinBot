@@ -14,6 +14,8 @@ def stream_fixture(monkeypatch):
     import app.agent_chat_provider as provider
     from app.agent_workflow import direct,tools
     import app.agent_workflow.checkpoints as checkpoints
+    # These tests are the old turn's (stage 6a made the kernel every turn's default): they keep the old turn until it is removed.
+    monkeypatch.setenv('FINBOT_KERNEL_DEFAULT','v1')
     saver=InMemorySaver()
     @asynccontextmanager
     async def temporary_saver(_url):yield saver

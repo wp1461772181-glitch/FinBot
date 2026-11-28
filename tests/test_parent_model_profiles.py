@@ -136,6 +136,7 @@ def test_public_https_endpoint_can_use_custom_tls_port(model,stream):
 
 
 def test_custom_endpoint_and_model_reach_standalone_classifier(monkeypatch):
+ monkeypatch.setenv('FINBOT_KERNEL_DEFAULT','v1')      # the old turn's classifier (stage 6a: the kernel is the default)
  real_client=httpx.AsyncClient;seen=[]
  def capture(req):
   b=json.loads(req.content);seen.append((str(req.url),b,req.headers['authorization']))

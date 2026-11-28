@@ -20,6 +20,7 @@ def test_stream_inactivity_returns_normal_done_and_checkpoint_status(monkeypatch
     import app.agent_workflow.checkpoints as checkpoints
     import app.agent_workflow.direct as direct
     saver=InMemorySaver()
+    monkeypatch.setenv("FINBOT_KERNEL_DEFAULT","v1")      # the old turn's own inactivity rule (stage 6a: the kernel is the default)
     @asynccontextmanager
     async def open_saver(_url): yield saver
     async def slow_decision(*_args):
