@@ -1098,9 +1098,10 @@ def _direct_after_reads(run, prepared: Prepared) -> bool:
     operation = prepared.operation
     if operation["name"] in OFFICIAL_FETCH:
         return True          # official material a page cannot choose; nothing of his changes
-    if operation["name"] in ("follow_up", "cancel_follow_up"):
-        # Its own promise to look again: nothing of his changes, and what a page said can at most make it look at something once more.
-        return True
+    if operation["name"] == "cancel_follow_up":
+        return True          # dropping one of its own promises: nothing of his changes
+    # ``follow_up`` is not here: after outside material a new one waits on the card (11-28 security review), as its words come back every
+    # turn and to the duty turn later.
     if operation["name"] == "report_missed":
         # 11-28 shadow: it looked up the filing first, then the record waited on a card for him to press.  The record holds his own words,
         # taken by the code from his message, and changes nothing else: a page it read cannot put words in his mouth.

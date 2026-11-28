@@ -16,7 +16,7 @@ import { buildTemplates, templateApply, templatePreview, templatesList, template
 import { NEWS, SKILLS, PROFILE, RECALL, TELEGRAM, BOT_TELEGRAM, PUSHOVER, KNOWLEDGE_DOCS, DRY_RUNS, REPAIRS, KNOWLEDGE_IMPORTABLE, knowledgeChunks, readSkillFile } from "./assistant.mjs";
 
 export function buildState() {
-  return { views: structuredClone(OWNER_VIEWS), bots: botList(), queue: [...WATCHLIST], chat: buildChat(), modelRoles: { ...MODEL_ROLES.roles }, portfolio: buildPortfolio(), tasks: structuredClone(TASKS), inbox: structuredClone(INBOX), proposals: structuredClone(PROPOSALS), runs: structuredClone(RUNS), routines: { writes: [] }, assistant: buildAssistant(), templates: buildTemplates(), watch: buildWatch(), settings: buildSettings(), permission: { mode: "default", writes: [] }, backstage: {} };
+  return { views: structuredClone(OWNER_VIEWS), bots: botList(), queue: [...WATCHLIST], chat: buildChat(), modelRoles: { ...MODEL_ROLES.roles }, portfolio: buildPortfolio(), tasks: structuredClone(TASKS), inbox: structuredClone(INBOX), proposals: structuredClone(PROPOSALS), runs: structuredClone(RUNS), routines: { writes: [] }, assistant: buildAssistant(), templates: buildTemplates(), watch: buildWatch(), settings: buildSettings(), permission: { mode: "default", writes: [] }, followUps: { items: [], writes: [] }, backstage: {} };
 }
 
 /** The 设置 pages' data as a mutable copy (P8.2): the write routes below change it and the reads answer from it.  `writes` keeps every write as the page sent it (the role table's own state is `modelRoles`).
@@ -434,6 +434,15 @@ function assistantRoutes(route, reply, own) {
     if (!state.watch.rules.some((r) => r.id === params.id)) return reply.status(404, { detail: "没有这条规则。" });
     state.watch.rules = state.watch.rules.filter((r) => r.id !== params.id);
     return { ok: true };
+  }));
+  // --- 它记着要回头看的事 (活人感 11-28): none by default (the section is hidden); a check puts its own in `state.followUps.items`.
+  route.get(`${A}/follow-ups`, own(({ state }) => ({ items: state.followUps.items, max_open: 5 })));
+  route.delete(`${A}/follow-ups/:id`, own(({ params, state }) => {
+    state.followUps.writes.push({ method: "DELETE", path: `/follow-ups/${params.id}`, body: null });
+    const found = state.followUps.items.find((i) => String(i.id) === params.id);
+    if (!found) return reply.status(404, { detail: "follow_up_not_found" });
+    state.followUps.items = state.followUps.items.filter((i) => i !== found);
+    return { ...found, status: "cancelled" };
   }));
   // --- 权限 (11-28): 每步都问 / 默认 / 完全放行; every write is kept in `state.permission.writes` as the page sent it.
   const LABELS = { ask: "每步都问", default: "默认", full: "完全放行" };

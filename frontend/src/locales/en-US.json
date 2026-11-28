@@ -2799,5 +2799,9 @@
   "相处方式": "How to talk with you",
   "近况": "Lately",
   "它对你的了解": "What it knows about you",
-  "它从你们的聊天里看出来的：怎么和你说话（相处方式），和你最近在想的事（近况，30 天没再提就不再用）。不对就改或删。": "What it picked up from your chats: how to talk with you, and what is on your mind lately (a “lately” item stops being used after 30 days without coming up again). Edit or delete anything that is wrong."
+  "它从你们的聊天里看出来的：怎么和你说话（相处方式），和你最近在想的事（近况，30 天没再提就不再用）。不对就改或删。": "What it picked up from your chats: how to talk with you, and what is on your mind lately (a “lately” item stops being used after 30 days without coming up again). Edit or delete anything that is wrong.",
+  "它记着要回头看的事": "Things it will look at again",
+  "已取消，它不会再回来看这件事。": "Cancelled. It will not come back to this.",
+  "取消失败，请重试。": "Couldn't cancel. Please try again.",
+  "它在对话里答应过回头再看的事。到时间它会去查，有新东西才告诉你；一天最多一条，夜里不打扰。": "Things it promised in a chat to look at again. When the time comes it checks and tells you only if there is something new: at most one a day, never at night."
 }

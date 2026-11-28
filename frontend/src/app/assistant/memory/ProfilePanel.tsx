@@ -13,6 +13,7 @@ import { confirmProfileItem, createProfileItem, deleteProfileItem, listProfileIt
 import { useLocale } from "../../../i18n";
 import { archiveNote, exampleLines, isSettled, layerLabel, manualItemDraft, originLabel, profileGroups, profileLayers, proposedItems, seenLine, templateNote } from "../../../memory-items.mjs";
 import { useLoad } from "../../use-load";
+import { FollowUpsSection } from "./FollowUpsSection";
 import { KINDS, KIND_LABELS, MAX_TEXT, canConfirm, canSaveEdit, isInferred, isPortrait, scopeChoices } from "./memory-view.mjs";
 
 const GLOBAL = "__global__"; // Radix Select has no empty item value
@@ -134,6 +135,7 @@ export function ProfilePanel({ onChanged }: { onChanged?: () => void } = {}) {
       <p data-testid="memory-portrait-note" className="m-0 max-w-3xl text-small text-muted-foreground">{t("它从你们的聊天里看出来的：怎么和你说话（相处方式），和你最近在想的事（近况，30 天没再提就不再用）。不对就改或删。")}</p>
       <ul className="m-0 flex list-none flex-col gap-2 p-0">{portrait.map(itemRow)}</ul>
     </section>}
+    <FollowUpsSection />
     {layers.map(layer => <section key={layer.key} data-testid="memory-layer" data-layer={layer.key} aria-label={layerTitle(layer)} className="flex min-w-0 flex-col gap-2">
       <h2 className="text-title-s text-ink">{layerTitle(layer)}<span className="ml-2 font-mono text-caption font-normal text-muted-foreground">{layer.items.length}</span></h2>
       <ul className="m-0 flex list-none flex-col gap-2 p-0">{layer.items.map(itemRow)}</ul>
