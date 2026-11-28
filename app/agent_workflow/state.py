@@ -68,6 +68,9 @@ class AgentRuntimeContext:
     # SW2 (spec-sw2 §3.1): the request-time facts for this turn's self-state block: model_label and the previous answer's check.
     self_state: dict | None = field(default=None, repr=False, compare=False)
     default_company: dict | None = field(default=None, compare=False)
+    # Where his message came from: "web", "telegram" or "wechat" (the bridges say so; None: the web page or a tool).  The kernel tells the
+    # model (``prompt.scene_line``): a chat channel shows plain text.
+    via: str | None = None
     # Skills (agent_skills): the listing of enabled skills, and a skill started for this turn (「/名字」 or a
     # task's skill): {name, version, body, output_template, tools}.  Steps, never evidence or write authority.
     skill_block: str | None = field(default=None, repr=False, compare=False)

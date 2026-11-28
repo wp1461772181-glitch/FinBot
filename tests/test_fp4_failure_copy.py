@@ -18,7 +18,7 @@ NOTICES = {
     'pending_request_expired': '这张卡片已经过期，没有执行任何操作。请把你的选择直接打字发给我，或重新提出请求。',
     'pending_request_mismatch': '这张卡片已经不是当前待处理的那一张，没有执行任何操作。请按最新的卡片操作，或重新提出请求。',
     'task_token_cap': '这次任务的用量达到了为它设定的上限，已停止。原样重跑结果相同；可以缩小任务范围后再试。',
-    'workflow_incomplete': '这一轮在生成过程中意外中断，没有生成回答。可以再发一次。',
+    'workflow_incomplete': '抱歉，我写到一半意外中断了，没能答完。你再发一次试试。',
     'provider_protocol_invalid': '模型服务这次返回的内容无法使用，本轮没有完成。可以再发一次；连续出现时请稍后再试。',
 }
 
@@ -36,8 +36,8 @@ def test_retry_does_not_claim_to_fix_limits(code):
 
 def test_unknown_failure_fallback():
     notice = _failure_notice(HTTPException(502, 'unknown_failure'))
-    assert notice == '这一轮没有完成，没有生成回答。可以再发一次；如果连续出现，请稍后再试或换个问法。'
-    assert '没有完成' in notice
+    assert notice == '抱歉，这次我没能答完。你再发一次试试；要是连着几次都这样，等一会儿再问，或者换个说法。'
+    assert '没能答完' in notice
 
 
 def test_knowledge_offline_copy():

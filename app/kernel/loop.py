@@ -653,6 +653,12 @@ async def _latest_block(run: "_Run", text: str, previous: str | None, focus: str
     return found
 
 
+def _scene(context) -> str | None:
+    """「此刻」 for this turn (``prompt.scene_line``); ``FINBOT_KERNEL_SCENE=off`` leaves it out (the kernel's tests describe the messages without it)."""
+    from ..agent_workflow.fp_flags import flag
+    return prompt.scene_line(getattr(context, "via", None)) if flag("FINBOT_KERNEL_SCENE", True) else None
+
+
 def note_latest(run: "_Run", symbols: list[str]) -> None:
     run.audit["latest_known"] = list(symbols)
     mark_timeline(run, "latest_known", symbols=list(symbols))
@@ -734,7 +740,7 @@ async def _run_turn(question: str, context, emit, messages: list[dict] | None = 
         latest = await _latest_block(run, run.question if fact else question, _previous_user_message(history, run.question if fact else question, original=bool(fact)),
                                      company.get("symbol") if isinstance(company, dict) else None, owner)
         run.messages = prompt.build_messages(question, context, history, fact=fact, skill=started, latest=latest, helper=helper.DELEGATE in run.tool_names,
-                                           tier=run.start_tier)
+                                           tier=run.start_tier, scene=_scene(context))
         if started:
             run.outside_in_prompt = True     # a skill's steps can be imported text
         if started and owner_credential_matches(getattr(context, "identity_credential", "")):

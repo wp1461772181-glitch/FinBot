@@ -695,7 +695,7 @@ async def _ask_agent(client, credential: str, bot_id: str, text: str, *, convers
     import httpx
     from app.agent_telegram import sse_events
 
-    body = {"bot_id": bot_id, "message": text[:MESSAGE_MAX_CHARS]}
+    body = {"bot_id": bot_id, "message": text[:MESSAGE_MAX_CHARS], "via": "telegram"}
     if conversation_id:
         body["conversation_id"] = conversation_id
     if pending_request_id:

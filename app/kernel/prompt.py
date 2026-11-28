@@ -12,6 +12,36 @@ from .skills import EXCEPTION, SKILL_LINE, render_skill
 SAY_LINE = "- 每次调用工具时，在 say 里用一句话说明你发现了什么、接下来做什么，用户会实时看到这句话。切换到 high 档后，先用 plan 列出清单，再逐项去做；之后每次调用工具时在 item 里写上这是清单的第几项，勾由系统来打。"
 FAST_TIER_LINE = ("- 你现在处于快速档。简单的问题直接回答，或者查一下就答。问题需要多步推理、比较权衡、给出判断，或者你拿不准时，"
                   "先调用 escalate 切换到更深的档位再继续。用户说「想深一点」「仔细分析」时用 high；用户说「快点」「简单说」时不要升档。")
+# 11-28 (owner: 「它就像一个工具，不像一个关心你方方面面的助手」, docs/finbot-humanlike-plan-2026-11-28): who it is and how it reads what he
+# says.  Before this the whole of it was one line, 「说话像一个可靠的同事：结论先说」, and every message was taken as a task (「这些企业看着
+# 就挺狠呐」 got 「"这些企业"指的是哪些公司，我还不能确定」).
+IDENTITY = """你是 FinBot，他的私人助手，最懂的是金融。下面如果有你记得的关于他的事、你们最近聊过的内容，就当作你认识他。
+
+他发来的每句话，先弄清它是什么：一件要办的事、一个问题、一句感想、一点担心，还是随口聊聊。是事就办，是问题就答；是感想就像朋友那样接话：说说你的看法，补一个他可能想知道的点，不用查一堆资料，更不用写成报告。他话里的「这些」「那家」「后者」，上文看得出指什么就直接接着说，真看不出来再问。
+
+说话跟着他来。他用行话你就用行话，他是新手就少用术语、多打比方；他轻松你也轻松，他着急先说最要紧的，他担心先接住担心再摆事实。长短看问题：一句话的事一句话答，他要报告才写报告。你有自己的看法，可以不同意他；不扫兴，也不奉承：好就说好在哪，有风险就直说。数字照旧只说查到的；闲聊里拿不准的数字就不报，或者顺手查一下。"""
+
+# Where and when this message reached it (``scene_line``): a fixed line after the cache point, right before the question.  A chat channel
+# shows the answer as plain text (Telegram showed 「## 结论」 as it was), so there it writes like a chat message.
+VIA_WEB, VIA_CHAT = "web", ("telegram", "wechat")
+_VIA_NAMES = {"web": "网页", "telegram": "Telegram", "wechat": "微信"}
+_WEEKDAYS = "一二三四五六日"
+
+
+def scene_line(via: str | None, now=None) -> str:
+    """「此刻」: the Beijing time and the channel of this message, and what the channel shows."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    at = (now or datetime.now(ZoneInfo("Asia/Shanghai"))).astimezone(ZoneInfo("Asia/Shanghai"))
+    via = via if via in _VIA_NAMES else VIA_WEB
+    when = f"北京时间 {at:%Y-%m-%d}（周{_WEEKDAYS[at.weekday()]}）{at:%H:%M}"
+    if via in VIA_CHAT:
+        shown = "那里只显示纯文字：像聊天那样用短句，不用 # 标题、表格和 ** 加粗。"
+    else:
+        shown = "网页能显示 Markdown，标题和表格只在真需要时用。"
+    return f"系统说明（此刻）：{when}。他是在{_VIA_NAMES[via]}上发来的这条消息，{shown}"
+
+
 # The line about the turn's own tier says where the turn really starts (``tiers.start_tier``).  11-28: after the start moved to mid
 # the text still said 「你现在处于快速档」, and a request for a full report stayed at mid all the way through.
 TIER_LINES = {
@@ -54,7 +84,7 @@ def system_text(skills: bool = False, helper: bool = False, tier: str = "low") -
     # Constant from turn to turn (one flag, read per call): the prefix stays byte-stable.  Off: the text is what it was.
     inline_line = INLINE_CATALOGUE_LINE + "\n" if flag("FINBOT_KERNEL_INLINE_CATALOGUE", True) else ""
     tier_line = TIER_LINES.get(tier, FAST_TIER_LINE)      # the server's start tier: constant from turn to turn
-    return f"""你是 FinBot，用户的金融助手。说话像一个可靠的同事：结论先说，不绕，不堆免责声明。
+    return f"""{IDENTITY}
 
 怎么做事
 - 用户问到公司的数字、公告、行情、新闻时，用工具去查，不要凭记忆回答数字。
@@ -75,6 +105,7 @@ def system_text(skills: bool = False, helper: bool = False, tier: str = "low") -
 - 用户说的情况比你查到的资料更新时，不要用旧资料否定用户；说明你手里资料的时间，并去更权威的来源核实（公司公告和 SEC 备案优先于新闻，新闻优先于社交平台）。
 - 可以给看法供用户参考，决定权在用户。你不能替用户下单。
 - 回答用简体中文，除非用户用别的语言提问。
+- 不必每次在结尾问要不要接着做；真有一个值得做的下一步，顺口说一句就够。
 
 动手改东西
 - 会改数据的事都通过 act 来做。先看 act 说明里的操作目录；不确定参数时只带 operation 调用一次，它会返回参数格式。
@@ -138,7 +169,7 @@ GUEST_NOTE = ("现在和你说话的是访客，不是登录的所有者：可�
 
 
 def build_messages(question: str, context, history: list[dict], *, fact: str | None = None, skill: dict | None = None,
-                   latest: str | None = None, helper: bool = False, tier: str = "low") -> list[dict]:
+                   latest: str | None = None, helper: bool = False, tier: str = "low", scene: str | None = None) -> list[dict]:
     """System prompt (+ the bot's instruction and, for the owner only, the profile block), then the history.
 
     ``history`` may already end with the current question; it is added only when it is not there.  With ``fact`` the question
@@ -179,7 +210,7 @@ def build_messages(question: str, context, history: list[dict], *, fact: str | N
                 asked += 1
         _mark_end_of_history(body, asked)
         return [{"role": "system", "content": system}, *body, *([{"role": "system", "content": latest}] if latest else []),
-                {"role": "system", "content": fact}]
+                *([{"role": "system", "content": scene}] if scene else []), {"role": "system", "content": fact}]
     # The question is already there when a user message after the last assistant message equals it; an equal message before
     # that assistant message is an earlier turn asking the same thing.
     after = next((i for i in range(len(body) - 1, -1, -1) if body[i].get("role") == "assistant"), -1)
@@ -204,6 +235,8 @@ def build_messages(question: str, context, history: list[dict], *, fact: str | N
             body.append({"role": "system", "content": render_skill(started)})
         if latest:
             body.append({"role": "system", "content": latest})
+        if scene:
+            body.append({"role": "system", "content": scene})
         if len(body) > asked:
             # The blocks above and his question reach the model as one user turn (the converters merge them); the memory note says it is
             # the system's, and without a line between them the model took his words for part of it (11-26 replay of 「灵敏度调成安静」:
@@ -215,6 +248,8 @@ def build_messages(question: str, context, history: list[dict], *, fact: str | N
         body.append({"role": "system", "content": render_skill(started)})
     if latest:
         body.append({"role": "system", "content": latest})
+    if scene:
+        body.append({"role": "system", "content": scene})
     return [{"role": "system", "content": system}, *body]
 
 

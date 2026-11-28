@@ -53,6 +53,8 @@ os.environ["FINBOT_ARCHIVE_BUILDS"] = "off"
 os.environ["FINBOT_HELPER"] = "off"
 # The kernel tests were written for turns that start low; tests/test_kernel_tiers.py checks the default (mid) on its own.
 os.environ.setdefault("FINBOT_KERNEL_START_TIER", "low")
+# The 「此刻」 line (time and channel) is on in the app; the kernel tests describe the messages without it, tests/test_humanlike.py turns it on.
+os.environ["FINBOT_KERNEL_SCENE"] = "off"
 
 # These imports must remain after DATABASE_URL is set so every application
 # module and test shares the disposable database engine.

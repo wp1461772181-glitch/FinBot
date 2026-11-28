@@ -377,7 +377,7 @@ async def ask_agent(http, credential: str, bot_id: str, text: str, on_event=None
     raw, pending, decoder = "", "", codecs.getincrementaldecoder("utf-8")("replace")
     try:
         async with http.stream("POST", f"{LOCAL_API}/agent-chat/stream",
-                               json={"bot_id": bot_id, "message": text[:MESSAGE_MAX_CHARS]},
+                               json={"bot_id": bot_id, "message": text[:MESSAGE_MAX_CHARS], "via": "wechat"},
                                headers={"X-Chat-Session": credential, "Accept": "text/event-stream"},
                                timeout=httpx.Timeout(300, connect=CONNECT_TIMEOUT)) as response:
             if response.status_code == 409:

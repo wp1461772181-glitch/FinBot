@@ -8,7 +8,7 @@ from app.agent_chat_provider import ProviderFailure
 from app.agent_chat_stream import _FAILURE_NOTICES, _failure_notice
 from app.agent_workflow.state import AgentRuntimeContext
 
-GENERIC = "这一轮没有完成，没有生成回答。可以再发一次；如果连续出现，请稍后再试或换个问法。"
+GENERIC = "抱歉，这次我没能答完。你再发一次试试；要是连着几次都这样，等一会儿再问，或者换个说法。"
 
 
 async def emit(_):
