@@ -1,64 +1,40 @@
-// The panel of the composer's model selector (the model only: how hard to think is the model's call, question by question; the effort row
-// was taken out 11-28): a centred command palette on a wide screen (AI Elements' Model Selector), a bottom drawer below 1024px, one body in both.
-// A chunk of its own: ModelEffortPicker loads it when the badge is first pressed (or hovered), so the composer carries only the badge.  It owns no state that matters:
-// the picker holds the catalog, the shown bot and the save, and this draws them; a choice goes back through `onChoose`.
+// The list of the composer's model selector, drawn inside the badge's own popover (it opens right above the composer, on every screen:
+// owner 11-28 「不要单独弹卡片，就直接在对话框那边选」; before, a centred palette or a bottom drawer).  Model only: how hard to think is the
+// model's call, question by question.  A chunk of its own: ModelEffortPicker loads it when the badge is first pressed (or hovered), so the
+// composer carries only the badge.  It owns no state that matters: the picker holds the catalog, the shown bot and the save, and this draws
+// them; a choice goes back through `onChoose`.
 import { useEffect, useRef, useState } from "react";
 import { Check, Lightbulb, Server } from "lucide-react";
-import { Drawer, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
 import {
-  ModelSelector, ModelSelectorContent, ModelSelectorEmpty, ModelSelectorGroup, ModelSelectorInput, ModelSelectorItem, ModelSelectorList, ModelSelectorLogo,
+  ModelSelectorEmpty, ModelSelectorGroup, ModelSelectorInput, ModelSelectorItem, ModelSelectorList, ModelSelectorLogo,
 } from "@/components/ai-elements/model-selector";
 import { Command } from "@/components/ui/command";
-import { cn } from "@/lib/utils";
 import { useLocale } from "../../i18n";
 import { modelSections } from "../../model-effort.mjs";
 import type { CatalogEffortEntry, ModelGroup } from "../../model-effort.mjs";
-import { useMatchMedia, PHONE_QUERY } from "./use-media";
 import type { Bot, ModelCatalog } from "../../api/bots";
 
 export type PanelProps = {
   open: boolean;
-  onOpenChange: (open: boolean) => void;
   catalog: ModelCatalog | null;
   shown: Bot;
   entry: CatalogEffortEntry | null;
   busy: boolean;
   error: string;
-  onChoose: (kind: "model" | "effort", value: string | null) => void;
-  /** Where focus goes when the panel closes: the badge (the dialog has no Trigger of its own to return to). */
-  returnFocus: () => void;
+  onChoose: (kind: "model", value: string | null) => void;
 };
 
 const DEFAULT_VALUE = "__server-default__";
 const pill = "rounded-full bg-action-soft px-1.5 text-caption text-action";
 
 export default function ModelEffortPanel(props: PanelProps) {
-  const { t } = useLocale();
-  const phone = useMatchMedia(PHONE_QUERY);
   const [highlight, setHighlight] = useState(props.shown.model ?? DEFAULT_VALUE);
-  // The panel stays mounted between openings (and across a switch of bot): every opening starts on the current model, never on
-  // the row last hovered, so Enter right away re-picks what is shown instead of saving a stale row.
+  // The list stays mounted between openings (and across a switch of bot): every opening starts on the current model, never on the row
+  // last hovered, so Enter right away re-picks what is shown instead of saving a stale row.
   useEffect(() => { if (props.open) setHighlight(props.shown.model ?? DEFAULT_VALUE); }, [props.open, props.shown.model]);
-  const commandProps = { value: highlight, onValueChange: setHighlight, className: "bg-transparent rounded-[inherit]" };
-  const title = t("模型");
-  const onCloseAutoFocus = (event: Event) => { event.preventDefault(); props.returnFocus(); };
-  // A wrapper that is always drawn, even while the catalog is on its way: the keyboard hint and the error sit under the list in both shells.
-  const body = <PanelBody {...props} />;
-  if (phone) {
-    return <Drawer open={props.open} onOpenChange={props.onOpenChange}>
-      <DrawerContent data-testid="model-picker" aria-describedby={undefined} className="picker-glass pb-[env(safe-area-inset-bottom,0px)]"
-        onOpenAutoFocus={(event) => event.preventDefault()} onCloseAutoFocus={onCloseAutoFocus}>
-        <DrawerTitle className="sr-only">{title}</DrawerTitle>
-        <Command {...commandProps} className={cn("min-h-0", commandProps.className)}>{body}</Command>
-      </DrawerContent>
-    </Drawer>;
-  }
-  return <ModelSelector open={props.open} onOpenChange={props.onOpenChange}>
-    <ModelSelectorContent title={title} data-testid="model-picker" showCloseButton={false} aria-describedby={undefined} onCloseAutoFocus={onCloseAutoFocus}
-      className="picker-glass gap-0 overflow-hidden rounded-lg sm:max-w-[28rem]" commandProps={commandProps}>
-      {body}
-    </ModelSelectorContent>
-  </ModelSelector>;
+  return <Command value={highlight} onValueChange={setHighlight} className="bg-transparent rounded-[inherit]">
+    <PanelBody {...props} />
+  </Command>;
 }
 
 function PanelBody({ catalog, shown, busy, error, onChoose }: PanelProps) {
@@ -70,7 +46,7 @@ function PanelBody({ catalog, shown, busy, error, onChoose }: PanelProps) {
 
   return <>
     <ModelSelectorInput placeholder={t("搜索模型或服务商…")} aria-label={t("模型")} />
-    <ModelSelectorList ref={list} label={t("模型")} className="max-h-[min(20rem,42dvh)] px-1.5 py-1">
+    <ModelSelectorList ref={list} label={t("模型")} className="max-h-[min(18rem,40dvh)] px-1.5 py-1">
       {!sections && !error && <p className="px-2 py-3 text-small text-muted-foreground">{t("正在读取模型目录…")}</p>}
       <ModelSelectorEmpty className="py-6 text-center text-small text-muted-foreground">{t("没有匹配的模型")}</ModelSelectorEmpty>
       {sections && <>
