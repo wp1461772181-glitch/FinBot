@@ -16,7 +16,7 @@ import { buildTemplates, templateApply, templatePreview, templatesList, template
 import { NEWS, SKILLS, PROFILE, RECALL, TELEGRAM, BOT_TELEGRAM, PUSHOVER, KNOWLEDGE_DOCS, DRY_RUNS, REPAIRS, KNOWLEDGE_IMPORTABLE, knowledgeChunks, readSkillFile } from "./assistant.mjs";
 
 export function buildState() {
-  return { views: structuredClone(OWNER_VIEWS), bots: botList(), queue: [...WATCHLIST], chat: buildChat(), modelRoles: { ...MODEL_ROLES.roles }, portfolio: buildPortfolio(), tasks: structuredClone(TASKS), inbox: structuredClone(INBOX), proposals: structuredClone(PROPOSALS), runs: structuredClone(RUNS), routines: { writes: [] }, assistant: buildAssistant(), templates: buildTemplates(), watch: buildWatch(), settings: buildSettings(), backstage: {} };
+  return { views: structuredClone(OWNER_VIEWS), bots: botList(), queue: [...WATCHLIST], chat: buildChat(), modelRoles: { ...MODEL_ROLES.roles }, portfolio: buildPortfolio(), tasks: structuredClone(TASKS), inbox: structuredClone(INBOX), proposals: structuredClone(PROPOSALS), runs: structuredClone(RUNS), routines: { writes: [] }, assistant: buildAssistant(), templates: buildTemplates(), watch: buildWatch(), settings: buildSettings(), permission: { mode: "default", writes: [] }, backstage: {} };
 }
 
 /** The 设置 pages' data as a mutable copy (P8.2): the write routes below change it and the reads answer from it.  `writes` keeps every write as the page sent it (the role table's own state is `modelRoles`).
@@ -434,6 +434,16 @@ function assistantRoutes(route, reply, own) {
     if (!state.watch.rules.some((r) => r.id === params.id)) return reply.status(404, { detail: "没有这条规则。" });
     state.watch.rules = state.watch.rules.filter((r) => r.id !== params.id);
     return { ok: true };
+  }));
+  // --- 权限 (11-28): 每步都问 / 默认 / 完全放行; every write is kept in `state.permission.writes` as the page sent it.
+  const LABELS = { ask: "每步都问", default: "默认", full: "完全放行" };
+  const permissionView = (mode) => ({ mode, label: LABELS[mode], modes: Object.entries(LABELS).map(([m, label]) => ({ mode: m, label })) });
+  route.get(`${A}/permission-mode`, own(({ state }) => permissionView(state.permission.mode)));
+  route.put(`${A}/permission-mode`, own(({ body, state }) => {
+    state.permission.writes.push({ method: "PUT", path: "/permission-mode", body: structuredClone(body ?? null) });
+    if (!(body?.mode in LABELS)) return reply.status(422, { detail: "invalid_mode" });
+    state.permission.mode = body.mode;
+    return permissionView(body.mode);
   }));
   // --- 它眼中的你: the overview of everything kept, the two page writes for a view, and the two downloads
   route.get(`${A}/memory/overview`, own(({ state }) => memoryOverview(state)));
