@@ -64,8 +64,11 @@ DELEGATE_SCHEMA: dict = {
 }
 
 
+OFF_WORDS = frozenset({"off", "0", "false", "no", "disabled"})      # any of these turns it off; unset or anything else is on
+
+
 def enabled() -> bool:
-    return os.environ.get("FINBOT_HELPER", "on").strip().lower() != "off"
+    return os.environ.get("FINBOT_HELPER", "on").strip().lower() not in OFF_WORDS
 
 
 def offered(names) -> bool:

@@ -649,6 +649,6 @@ def test_the_app_default_is_on_and_off_takes_it_away(monkeypatch):
     from app.kernel import helper
     monkeypatch.delenv("FINBOT_HELPER", raising=False)
     assert helper.enabled() is True
-    for value, expected in (("off", False), ("OFF", False), ("on", True), ("", True), ("no", True)):
+    for value, expected in (("off", False), ("OFF", False), ("0", False), ("false", False), ("no", False), ("disabled", False), ("on", True), ("", True), ("1", True)):
         monkeypatch.setenv("FINBOT_HELPER", value)
         assert helper.enabled() is expected
