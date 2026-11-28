@@ -33,9 +33,9 @@ GOLDEN = {
     # 5c-3c: act gains rate_alert (the system text is unchanged).
     # 5d-3a: act gains rate_answer, and each tier-1 operation's line names its arguments (the system text is unchanged).
     "owner": ("0eb51747354bc78dcedee182d0f8f57a89fcf3d12791787a998063ea9c05f11a",
-               "a8939601bb56f0e88c086dbccfe6e622e619b16b8c19b56d48e566b558928303"),
+               "dfba2139060fcc9b244ad1a9059886b63854b5166e337659a4f2bb4d73ad15c0"),
     # 6a: a guest's system prompt gains the line about what only the owner can do (``prompt.GUEST_NOTE``); the owner's is unchanged.
-    "guest": ("cc697baf95543b43614509bb70ea10889ed11ab173f2089dd28e703b49fdaa4d", "e02eb10753903050001bcd7b2958b43b174e6eb5c68cf837ae04753d8b6d3eff"),
+    "guest": ("cc697baf95543b43614509bb70ea10889ed11ab173f2089dd28e703b49fdaa4d", "a8251c31e25b8eff8a607b18941fc3d08925054eae7f80034e1223a6ad14255a"),
 }
 
 

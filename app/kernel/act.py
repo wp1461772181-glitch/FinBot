@@ -993,6 +993,10 @@ async def handle(run, args: dict) -> dict:
 
 def _direct_after_reads(run, prepared: Prepared) -> bool:
     operation = prepared.operation
+    if operation["name"] == "report_missed":
+        # 11-28 shadow: it looked up the filing first, then the record waited on a card for him to press.  The record holds his own words,
+        # taken by the code from his message, and changes nothing else: a page it read cannot put words in his mouth.
+        return True
     return memory_writes() and operation["name"] == "remember" and operation["arguments"].get("basis") == "noticed"
 
 

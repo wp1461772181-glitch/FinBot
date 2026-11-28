@@ -48,9 +48,11 @@ def test_with_no_read_it_is_recorded_at_once_with_where_he_said_it(line):
     assert kept["symbol"] == "NVDA" and kept["quote"] == SAID and kept["conversation_id"] == str(line) and kept["turn_id"] == str(turn)   # his words, kept by the code
 
 
-def test_after_an_outside_read_it_goes_on_the_card_and_the_press_records_it(line):
+def test_after_an_outside_read_it_is_still_recorded_at_once(line):
+    """11-28 shadow: it read the filing first, then the record waited on a card.  The record is his own words, kept by the code: a page it
+    read cannot make them up, so it runs at once like a guess does."""
     out, run_ = report(line, {"what": "美光的委托书没告诉我", "symbol": "MU"}, read_results=1)
-    assert run_.proposals and run_.proposals[0].operation["name"] == "report_missed" and missed_reports.recent(OWNER_HASH) == []
+    assert out["ok"] and run_.proposals == [] and [r["symbol"] for r in missed_reports.recent(OWNER_HASH)] == ["MU"]
 
 
 def test_a_guest_cannot_report(line):
@@ -77,3 +79,9 @@ def test_the_list_tool_prints_the_rows(line, monkeypatch, capsys):
     assert tool.main([]) == 0 and "还没有记下过" in capsys.readouterr().out
     missed_reports.record(OWNER_HASH, "美光的委托书没告诉我", symbol="MU", quote="美光那份委托书你没提醒我")
     assert tool.main([]) == 0 and "MU" in (printed := capsys.readouterr().out) and "美光的委托书没告诉我" in printed
+
+
+
+def test_the_system_text_points_at_it():
+    from app.kernel import prompt
+    assert "report_missed" in prompt.system_text() and "这事怎么没告诉我" in prompt.system_text()
