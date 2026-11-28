@@ -184,6 +184,7 @@ def create_tables() -> None:
             raise RuntimeError("PUBLIC_API_MODE requires exact CORS_ALLOWED_ORIGINS; wildcard origins are not allowed")
     from . import work  # registers agent_work with the metadata the next call creates
     from . import earnings_calendar  # noqa: F401  (registers earnings_calendar, 5e-1)
+    from . import missed_reports  # noqa: F401  (registers missed_reports, 11-28)
     # V2 schema changes are applied only by its explicit, locked migration.
     # Keep the longstanding startup behavior for legacy tables alone.
     Base.metadata.create_all(
