@@ -44,6 +44,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--day", type=_day)
     ap.add_argument("--now", type=_instant)
     ap.add_argument("--since-hours", type=float)
+    ap.add_argument("--resend", action="store_true", help="then hand each finding to the duty turn (shadow mode: nothing is sent) and print what it decided")
     ap.add_argument("--sentinel-db", type=Path, default=DEFAULT_SENTINEL_DB)
     ap.add_argument("--snapshot", type=Path, default=DEFAULT_SNAPSHOT)
     args = ap.parse_args(argv)
@@ -76,6 +77,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{day} 的自查没有跑：这一天刚被别处占用。", file=sys.stderr)
         return 1
     print(json.dumps(row, ensure_ascii=False, indent=1, default=str))
+    if args.resend:
+        import asyncio
+        judged = asyncio.run(selfcheck.resend(row, owner, now, snapshot=snapshot))
+        print(json.dumps([{key: r.get(key) for key in ("alert_id", "outcome", "decision", "delivery", "ms", "reason", "message")} for r in judged],
+                         ensure_ascii=False, indent=1, default=str))
     return 0 if row.get("outcome") == "done" else 1
 
 
