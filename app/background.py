@@ -15,6 +15,7 @@ from . import model_usage
 
 log = logging.getLogger(__name__)
 ROUTINE_SECONDS = 300
+KNOWLEDGE_INDEX_SECONDS = 120   # a pass syncs a page per source kind and indexes up to box_index.MAX_CHUNKS chunks
 HOURLY_SECONDS = 3600
 NEWS_SECONDS = 900         # configured news sources; until this loop the library was only refreshed while a chat turn waited on it
 RELEASE_FIGURES_SECONDS = 600   # 8-K earnings-release figures for a quarter whose 10-Q/10-K is not filed yet
@@ -191,6 +192,26 @@ def run_selfcheck() -> None:
                  sorted((row.get("checked") or {}).get("errors") or {}))
 
 
+def run_knowledge_index() -> None:
+    """The knowledge index's write side on the box (app.knowledge.box_index): new sources synced, chunked, embedded and written to
+    pgvector.  Off with FINBOT_KNOWLEDGE_INDEX=off; does nothing where its tokenizer and the two login files are not (a checkout, CI)."""
+    from .agent_workflow.fp_flags import flag
+    from .knowledge import box_index
+
+    if not flag("FINBOT_KNOWLEDGE_INDEX", True):
+        return
+    result = box_index.run_once()
+    if result.get("skipped"):
+        if not getattr(run_knowledge_index, "_told", False):
+            log.info("knowledge index not run: %s", result["skipped"])
+            run_knowledge_index._told = True
+        return
+    indexed = result.get("indexed") or {}
+    accepted = sum((v or {}).get("accepted") or 0 for v in (result.get("synced") or {}).values())
+    if accepted or indexed.get("indexed") or indexed.get("failed"):
+        log.info("knowledge index: %s new documents, %s chunks indexed, %s failed", accepted, indexed.get("indexed", 0), indexed.get("failed", 0))
+
+
 LOOPS = (
     ("routine-tasks", ROUTINE_SECONDS, run_routine_tasks),
     ("sec-monitor", HOURLY_SECONDS, run_sec_monitor),
@@ -205,6 +226,7 @@ LOOPS = (
     ("duty-selfcheck", SELFCHECK_SECONDS, run_selfcheck),
     ("earnings-calendar", EARNINGS_CALENDAR_SECONDS, run_earnings_calendar),
     ("earnings-prep", PREP_SECONDS, run_earnings_prep),
+    ("knowledge-index", KNOWLEDGE_INDEX_SECONDS, run_knowledge_index),
 )
 
 
