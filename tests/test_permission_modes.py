@@ -197,20 +197,19 @@ def test_in_the_full_mode_news_in_the_latest_block_keeps_tier_two_and_three_on_t
     assert fake_consent.costly == [] and statuses(fake) == ["awaiting_confirmation", "done"]
 
 
-def test_the_latest_block_marks_outside_text_only_for_news(env, monkeypatch):
+def test_any_latest_block_marks_outside_text(env, monkeypatch):
+    """Not every line of the block is a cited row (往来, notices), so any block counts, whatever its rows are (fails shut)."""
     from app import latest_known
-    seen = {}
-    for kind, outside in (("market_data", False), ("official_filing", False), ("configured_news", True)):
+    for kind in ("market_data", "official_filing", "configured_news"):
         async def block_for(text, previous=None, focus=None, rows=None, owner_hash=None, conversation_id=None, kind=kind):
             rows.append({"id": "r1", "source_type": kind, "title": "t"})
             return "最新：t", ["AAPL"]
         monkeypatch.setattr(latest_known, "block_for", block_for)
         monkeypatch.setattr(loop, "number_attached", lambda run, text, rows: text)
-        holder = type("R", (), {"outside_in_prompt": False, "context": ctx(), "audit": {}, "timeline": []})()
         monkeypatch.setattr(loop, "note_latest", lambda run, symbols: None)
+        holder = type("R", (), {"outside_in_prompt": False, "context": ctx(), "audit": {}, "timeline": []})()
         asyncio.run(loop._latest_block(holder, "AAPL 怎么样", None, None, True))
-        seen[kind] = holder.outside_in_prompt
-        assert holder.outside_in_prompt is outside, kind
+        assert holder.outside_in_prompt is True, kind
 
 
 def test_the_same_operation_twice_in_a_turn_runs_once(env, fake_consent, mode):

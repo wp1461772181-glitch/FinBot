@@ -1129,7 +1129,7 @@ async def _runs_at_once(run, prepared: Prepared, go_ahead) -> bool:
     * once outside material has been read this turn, only what such material cannot abuse runs at once (a guess, a missed-alert note,
       fetching official material), in every mode;
     * ``ask``: everything waits; ``default``: tier 1 runs; ``full``, or his own 「直接做」 this turn (``go_ahead``): tier 2 and 3 run too,
-      unless outside text came in without a read (news lines in the 「系统最新掌握」 block, a skill's text): then only tier 1 does."""
+      unless outside text came in without a read (a 「系统最新掌握」 block, a skill's text): then only tier 1 does."""
     if prepared.options is not None or _always_card(prepared.operation):
         return False
     if run.read_results:

@@ -90,7 +90,7 @@ class _Run:
     tier: str = "low"
     permission_mode: str | None = None
     typed_this_turn: str = ""
-    outside_in_prompt: bool = False    # outside text came in without a read (news in the latest-known block, a skill): see act._runs_at_once
+    outside_in_prompt: bool = False    # outside text came in without a read (a latest-known block, a skill): see act._runs_at_once
     done_at_once: dict = field(default_factory=dict)          # what he sent while this turn ran (``question`` is what began it); never an earlier turn   # his permission mode, read once a turn by ``act`` (``app.permission_mode``)
     started: float = field(default_factory=time.monotonic)
     citations: list = field(default_factory=list)
@@ -645,13 +645,11 @@ async def _latest_block(run: "_Run", text: str, previous: str | None, focus: str
         return None
     if not found:
         return None
-    if any(row.get("source_type") not in _OFFICIAL_LATEST for row in rows):
-        run.outside_in_prompt = True        # a news title is third-party text, as a page is
+    # News titles are third-party text, and 往来 and notices carry earlier answers that may retell a page; not every line is a cited
+    # row, so any block counts (fails shut; 11-28 review).
+    run.outside_in_prompt = True
     note_latest(run, symbols)
     return found
-
-
-_OFFICIAL_LATEST = {"official_filing", "market_data", "calculation"}
 
 
 def note_latest(run: "_Run", symbols: list[str]) -> None:
