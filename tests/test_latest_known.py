@@ -1101,10 +1101,10 @@ def test_a_failing_guidance_read_costs_only_the_guidance_line(guided, monkeypatc
 
 # --- 档案的「往来」(design section 5, 11-28): what it told him about the company, what he asked and what was answered --------------
 
-def _talk(owner, question, answer, at):
+def _talk(owner, question, answer, at, archived=False):
     from app.agent_chat_models import AgentConversation, AgentMessage
     with SessionLocal() as db:
-        line = AgentConversation(owner_hash=owner)
+        line = AgentConversation(owner_hash=owner, archived_at=at if archived else None)
         db.add(line)
         db.commit()
         turn = uuid.uuid4()
@@ -1151,3 +1151,36 @@ def test_dealings_are_dropped_first_when_the_block_is_too_long():
             "view": {"text": "看法" * 60, "at": NOW.isoformat()}}
     text, _ = lk._render([dict(item), dict(item, symbol="AMD"), dict(item, symbol="AAPL")], NOW, [])
     assert len(text) <= lk.BLOCK_LIMIT and "你的看法" in text
+
+
+
+def test_dealings_leave_out_system_posts_hidden_lines_and_this_conversation_and_keep_the_id(world):
+    """Review 11-28: the duty's hidden line and a task's post are not his questions; this conversation is in the history already; a long
+    question and answer never cut the conversation id; a ticker next to Chinese counts; old citation marks are dropped."""
+    from app.agent_recall import TASK_POST_HEAD
+    _wipe_dealings()
+    try:
+        _bar("NVDA", date(2026, 11, 23), 120.0)
+        _talk(OWNER, f"{TASK_POST_HEAD}盯盘提醒 #61 NVDA 涨 7%", "（值班的判断）", NOW - timedelta(hours=5))
+        _talk(OWNER, "英伟达的事你记一下", "好", NOW - timedelta(hours=4), archived=True)
+        here = _talk(OWNER, "英伟达呢", "刚说过", NOW - timedelta(hours=1))
+        long_q = "NVDA今天这个涨幅和数据中心的指引上调之间到底有多大关系，能不能帮我把前因后果理一遍"
+        cid = _talk(OWNER, long_q, "## 结论\n关系很大 [3]：数据中心收入同比增长 62% [#2]，指引上调到了 1,330 亿美元，市场预期被明显抬高，这一波上涨主要由它驱动。", NOW - timedelta(days=2))
+        text, _ = asyncio.run(lk.block_for("英伟达今天呢", previous=None, focus=None, owner_hash=OWNER, now=NOW, conversation_id=here))
+        lines = [line for line in text.splitlines() if "往来" in line and "你问过" in line]
+        assert len(lines) == 1 and lines[0].endswith(f"（对话 {cid}）") and len(lines[0]) <= lk.LINE_LIMIT + 40
+        assert "[3]" not in lines[0] and "[#2]" not in lines[0] and "NVDA今天" in lines[0]
+        assert "盯盘提醒" not in text and "你记一下" not in text and "刚说过" not in text
+    finally:
+        _wipe_dealings()
+
+
+def test_the_dealings_note_goes_with_the_last_dealing():
+    item = {"symbol": "NVDA", "name": "英伟达", "price": None, "filings": [], "news": [], "view": {"text": "看法", "at": NOW.isoformat()},
+            "dealings": [{"kind": "asked", "at": NOW, "text": "问" * 40, "answer": "答" * 50, "conversation_id": "c" * 36}]}
+    text, _ = lk._render([dict(item, dealings=list(item["dealings"]))], NOW, [])
+    assert lk.DEALINGS_NOTE in text
+    news = [{"title": "新" * 200, "published_at": NOW - timedelta(hours=n), "url": f"https://example.test/{n}", "source": "测试源"} for n in range(3)]
+    crowded = [dict(item, symbol=s, news=list(news), view={"text": "看法" * 120, "at": NOW.isoformat()}, dealings=list(item["dealings"])) for s in ("NVDA", "AMD", "AAPL")]
+    text, _ = lk._render(crowded, NOW, [])
+    assert "往来" not in text and lk.DEALINGS_NOTE not in text and len(text) <= lk.BLOCK_LIMIT      # dropped first, its note with it

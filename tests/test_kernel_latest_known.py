@@ -19,7 +19,7 @@ class Recorder:
     def __init__(self, result=(BLOCK, ["NVDA"]), failure=None, rows=()):
         self.calls, self.result, self.failure, self.rows = [], result, failure, list(rows)
 
-    async def __call__(self, text, *, previous, focus, owner_hash, now=None, rows=None):
+    async def __call__(self, text, *, previous, focus, owner_hash, now=None, rows=None, conversation_id=None):
         self.calls.append({"text": text, "previous": previous, "focus": focus, "owner_hash": owner_hash})
         if self.failure:
             raise self.failure
